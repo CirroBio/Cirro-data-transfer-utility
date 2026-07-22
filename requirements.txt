@@ -1,0 +1,8 @@
+cirro
+fastapi
+uvicorn[standard]
+boto3
+google-cloud-storage
+paramiko
+httpx
+python-multipart
