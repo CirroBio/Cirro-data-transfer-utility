@@ -1,9 +1,14 @@
 # Cirro Data Transfer Utility
 
 Interactive tool to bulk-transfer files from external sources into
-[Cirro](https://cirro.bio) as complete, immutable datasets — driven by two
-CSVs, resumable across restarts, with live progress and end-to-end checksum
+[Cirro](https://cirro.bio) as complete, immutable datasets — driven by a
+**migration plan** of two CSV tables (`dataset_plan.csv` + `file_plan.csv`),
+resumable across restarts, with live progress and end-to-end checksum
 verification.
+
+The plan describes a three-level hierarchy — files organized into datasets,
+datasets organized into folders within a study/project. See
+[the schema](#input-schema-levels-13) below.
 
 - **Sources:** `https://`, `s3://`, `gs://`, `ftp://`, `sftp://`, and a
   `syn://` (Synapse) interface stub.
@@ -21,7 +26,7 @@ verification.
   in production.
 
 ```
-CSVs ─▶ csv_loader ─▶ SQLite (datasets/files/queue/manifest_cache)
+plan CSVs ─▶ csv_loader ─▶ SQLite (datasets/files/excluded/queue/manifest_cache)
                           │
    cirro_gateway ─▶ reconcile ─▶ status badges (PRESENT/MISMATCH/PENDING)
                           │
@@ -72,46 +77,67 @@ For frontend development with hot reload, run `npm run dev` in `frontend/`
 1. **Log in** — click *Log in*; a device-code link + code appears. Complete it
    in your browser. The token is cached (`enable_cache=True`) so it survives
    restarts.
-2. **Pick a default project** (optional) — used for datasets whose CSV row
-   leaves `project` blank.
-3. **Load the two CSVs** (see below) — validated and stored.
+2. **Pick a fallback project** (optional) — used only if a dataset row has no
+   `study`; normally the study *is* the project.
+3. **Load the plan** (`dataset_plan.csv` + `file_plan.csv`, see below) —
+   validated and stored.
 4. **Reconcile** — marks each dataset `PRESENT` (already in Cirro & matching),
    `MISMATCH`, or `PENDING`.
 5. **Transfer** — enqueue pending datasets; watch live download/upload progress
    and per-file verification in the queue panel.
 
-### CSV formats
+### Input schema (levels 1–3)
 
-Headers are case/spacing/underscore tolerant. See `examples/`.
+The plan is two CSV tables. Headers are case/spacing/underscore tolerant, but
+the column names are the plan's own. See `examples/`.
 
-**datasets.csv**
+A dataset's identity is the pair **(`target_dataset_name`, `cirro_folder_path`)**
+— the same name recurs across folders within one study, so the name alone is
+not unique. `file_plan` rows join to their dataset on that same pair.
+
+**Level 3 — Folders.** `cirro_folder_path` is a tree **rooted at the study**.
+The study is the Cirro **project**; the remainder of the path is the dataset's
+folder *within* that project (recorded as a `folder://` tag). A dataset whose
+`cirro_folder_path` equals its study sits at the project root.
+
+**Level 2 — `dataset_plan.csv`** (one row per target Cirro dataset):
 
 | column | required | notes |
 | --- | --- | --- |
-| `name` | yes | dataset name (also the reconcile key) |
-| `data type` | yes | a Cirro **ingest process** name or id |
-| `description` | no | |
-| `project` | no | name or id; blank → UI default project |
-| `folder path` | no | added as a `folder://<path>` tag |
-| `tags` | no | `;`-separated extra tags |
+| `target_dataset_name` | yes* | the Cirro dataset name |
+| `study` | yes* | the Cirro **project** (name or id) |
+| `cirro_folder_path` | yes* | folder path, rooted at the study |
+| `status` | yes | `included` (transferred) or `excluded` (recorded only) |
+| `cirro_type_id` | yes* | a Cirro **ingest process** id — the dataset's type |
+| `cirro_type_name` | no | display label for the type |
+| `source_kind` | no | e.g. `gcs_files`, `local_sheet` |
+| `source_dataset_id`, `source_subpath` | no | provenance |
+| `n_files` | no | expected file count (cross-checked against `file_plan`) |
+| `total_size_bytes` | no | expected total size |
+| `excluded_at` | no | reason/timestamp for `excluded` rows |
 
-**files.csv**
+\* Required on `included` rows. `excluded` rows have no Cirro target (blank
+name/folder/type); they are identified by `study` + `source_dataset_id`, stored
+separately, and never transferred.
+
+**Level 1 — `file_plan.csv`** (one row per file that moves):
 
 | column | required | notes |
 | --- | --- | --- |
-| `dataset` | yes | must match a `datasets.csv` `name` |
-| `source uri` | yes | `https/s3/gs/ftp/sftp/syn` URI |
-| `relative path` | yes | destination path within the dataset |
-| `size` | no | expected bytes (verified after download) |
-| `checksum` | no | expected checksum of the file contents |
-| `checksum type` | no | `md5` / `sha256` / `crc32c` / `crc64nvme` |
+| `target_dataset_name` | yes | with `cirro_folder_path`, the dataset it joins |
+| `cirro_folder_path` | yes | |
+| `target_relative_path` | yes | destination path within the dataset |
+| `source_location` | yes | `https/s3/gs/ftp/sftp/syn` source URI |
+| `size_bytes` | yes | expected bytes (verified after download) |
+| `hash` | no | base64-encoded MD5 of the content |
+| `source_dataset_id`, `source_subpath`, `source_pathname` | no | provenance |
 
 ### Checksum verification ladder
 
 Per downloaded file the strongest available check is used and recorded
 (shown in the UI under *Verified by*):
 
-1. **csv** — the checksum you supplied in `files.csv`.
+1. **csv** — the `hash` supplied in `file_plan.csv` (base64 MD5).
 2. **source** — a checksum advertised by the source (S3 ETag/checksum, GCS
    md5/crc32c, HTTP Content-MD5).
 3. **size** — byte size only.

@@ -1,22 +1,24 @@
 """Compare each dataset spec against what already exists in Cirro.
 
 Result per dataset:
-- PRESENT : a dataset with this name exists and its files (and sizes, when the
-            CSV supplies them) match the spec.
+- PRESENT : a dataset with this name+folder exists in the study's project and
+            its files (and sizes, when the plan supplies them) match.
 - MISMATCH: it exists but the files/sizes differ.
 - PENDING : not found in Cirro; ready to transfer.
 
-Cirro reports file paths under a ``data/`` prefix; the spec paths don't carry
-it, so we strip it before comparing.
+The study is the Cirro project. Because a dataset name can recur across folders
+within one project, the folder (recorded as a folder:// tag) disambiguates.
+Cirro reports file paths under a ``data/`` prefix; spec paths don't carry it, so
+we strip it before comparing.
 """
 from __future__ import annotations
 
-import json
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from backend import cache, db
 from backend.cirro_gateway import CirroGateway
 from backend.models import Status
+from backend.schema import folder_in_project
 
 
 def _strip_data(path: str) -> str:
@@ -26,18 +28,20 @@ def _strip_data(path: str) -> str:
 def _load_specs() -> List[Dict]:
     with db.read() as conn:
         datasets = conn.execute(
-            "SELECT name, project, tags_json, status FROM datasets"
+            "SELECT key, name, study, folder_path, status FROM datasets"
         ).fetchall()
         rows = []
         for d in datasets:
             files = conn.execute(
-                "SELECT relative_path, expected_size FROM files WHERE dataset_name=?",
-                (d["name"],),
+                "SELECT relative_path, expected_size FROM files WHERE dataset_key=?",
+                (d["key"],),
             ).fetchall()
             rows.append(
                 {
+                    "key": d["key"],
                     "name": d["name"],
-                    "project": d["project"],
+                    "study": d["study"],
+                    "folder_path": d["folder_path"],
                     "status": d["status"],
                     "files": [
                         {"relative_path": f["relative_path"], "expected_size": f["expected_size"]}
@@ -61,11 +65,11 @@ def _compare(spec_files: List[Dict], cirro_files: List[Dict]) -> bool:
     return True
 
 
-def _set_status(name: str, status: str) -> None:
+def _set_status(key: str, status: str) -> None:
     with db.write() as conn:
         conn.execute(
-            "UPDATE datasets SET status=?, updated_at=datetime('now') WHERE name=?",
-            (status, name),
+            "UPDATE datasets SET status=?, updated_at=datetime('now') WHERE key=?",
+            (status, key),
         )
 
 
@@ -74,28 +78,35 @@ def reconcile_all(gateway: CirroGateway, default_project: Optional[str] = None) 
     Datasets already marked DONE are left as-is."""
     results = []
     for spec in _load_specs():
-        name = spec["name"]
+        key, name = spec["key"], spec["name"]
+
+        def result(status: str, **extra) -> Dict:
+            item = {"key": key, "name": name, "status": status, **extra}
+            results.append(item)
+            return item
+
         if spec["status"] == Status.DONE:
-            results.append({"name": name, "status": Status.DONE})
+            result(Status.DONE)
             continue
-        project_ref = spec["project"] or default_project
+        project_ref = spec["study"] or default_project
         if not project_ref:
-            _set_status(name, Status.PENDING)
-            results.append({"name": name, "status": Status.PENDING, "note": "no project"})
+            _set_status(key, Status.PENDING)
+            result(Status.PENDING, note="no study/project")
             continue
 
+        folder = folder_in_project(spec["study"], spec["folder_path"])
         project_id = gateway.resolve_project_id(project_ref)
-        cached = cache.get(project_id, name)
+        cached = cache.get(project_id, key)
         if cached is None:
-            dataset = gateway.find_dataset(project_id, name)
+            dataset = gateway.find_dataset(project_id, name, folder)
             if dataset is None:
-                cache.put(project_id, name, None, [])
+                cache.put(project_id, key, None, [])
                 cirro_files: List[Dict] = []
                 dataset_id = None
             else:
                 cirro_files = gateway.list_dataset_files(dataset)
                 dataset_id = dataset.id
-                cache.put(project_id, name, dataset_id, cirro_files)
+                cache.put(project_id, key, dataset_id, cirro_files)
         else:
             cirro_files = cached["files"]
             dataset_id = cached["dataset_id"]
@@ -104,6 +115,6 @@ def reconcile_all(gateway: CirroGateway, default_project: Optional[str] = None) 
             status = Status.PENDING
         else:
             status = Status.PRESENT if _compare(spec["files"], cirro_files) else Status.MISMATCH
-        _set_status(name, status)
-        results.append({"name": name, "status": status})
+        _set_status(key, status)
+        result(status)
     return results

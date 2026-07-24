@@ -56,7 +56,11 @@ class Downloader(ABC):
         stat = self.stat(spec.source_uri)
 
         csv_ck = (
-            Checksum.make(spec.checksum_type or "md5", spec.expected_checksum)
+            Checksum.make(
+                spec.checksum_type or "md5",
+                spec.expected_checksum,
+                encoding=getattr(spec, "checksum_encoding", None) or "hex",
+            )
             if spec.expected_checksum and spec.checksum_type
             else None
         )

@@ -9,6 +9,13 @@ interface Props {
   onChanged: () => void;
 }
 
+// cirro_folder_path is rooted at the study (= project); the in-project folder
+// is that path with the study prefix removed.
+function folderInProject(study: string, folderPath: string): string {
+  if (folderPath === study) return "";
+  return folderPath.startsWith(study + "/") ? folderPath.slice(study.length + 1) : folderPath;
+}
+
 function humanBytes(n: number | null): string {
   if (n === null || n === undefined) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -33,8 +40,8 @@ export default function DatasetTable({ datasets, progress, connected, onChanged 
         </div>
         <div className="empty">
           <span className="icon">📄</span>
-          No datasets loaded. Choose your <strong>datasets.csv</strong> and{" "}
-          <strong>files.csv</strong> above, then <strong>Load CSVs</strong>.
+          No datasets loaded. Choose your <strong>dataset_plan.csv</strong> and{" "}
+          <strong>file_plan.csv</strong> above, then <strong>Load plan</strong>.
         </div>
       </div>
     );
@@ -50,7 +57,8 @@ export default function DatasetTable({ datasets, progress, connected, onChanged 
         <thead>
           <tr>
             <th>Name</th>
-            <th>Project</th>
+            <th>Project (study)</th>
+            <th>Folder</th>
             <th>Data type</th>
             <th>Files</th>
             <th>Status</th>
@@ -58,42 +66,43 @@ export default function DatasetTable({ datasets, progress, connected, onChanged 
           </tr>
         </thead>
         <tbody>
-          {datasets.map((d) => (
-            <Fragment key={d.name}>
+          {datasets.map((d) => {
+            const folder = folderInProject(d.study, d.folder_path);
+            return (
+            <Fragment key={d.key}>
               <tr>
                 <td>
                   <span className="name">{d.name}</span>
-                  {d.tags.length > 0 && (
-                    <div className="tags">
-                      {d.tags.map((t) => (
-                        <span key={t} className={`tag${t.startsWith("folder://") ? " folder" : ""}`}>{t}</span>
-                      ))}
-                    </div>
+                </td>
+                <td className="muted">{d.study || "—"}</td>
+                <td className="muted mono">{folder || "/"}</td>
+                <td className="muted" title={d.data_type}>{d.cirro_type_name || d.data_type}</td>
+                <td>
+                  {d.files.length}
+                  {d.planned_files != null && d.planned_files !== d.files.length && (
+                    <span className="faint"> / {d.planned_files}</span>
                   )}
                 </td>
-                <td className="muted">{d.project || "—"}</td>
-                <td className="muted mono">{d.data_type}</td>
-                <td>{d.files.length}</td>
                 <td>
                   <span className={`badge ${d.status}`}>{d.status}</span>
-                  {progress[d.name] && <div className="progress">{progress[d.name]}</div>}
+                  {progress[d.key] && <div className="progress">{progress[d.key]}</div>}
                   {d.error && <div className="error" style={{ fontSize: 12 }}>{d.error}</div>}
                 </td>
                 <td className="row">
                   <button
                     className="secondary"
-                    onClick={() => setExpanded(expanded === d.name ? null : d.name)}
+                    onClick={() => setExpanded(expanded === d.key ? null : d.key)}
                   >
-                    {expanded === d.name ? "Hide" : "Files"}
+                    {expanded === d.key ? "Hide" : "Files"}
                   </button>
                   {connected && ["PENDING", "MISMATCH", "FAILED"].includes(d.status) && (
-                    <button onClick={() => api.transfer([d.name]).then(onChanged)}>Transfer</button>
+                    <button onClick={() => api.transfer([d.key]).then(onChanged)}>Transfer</button>
                   )}
                 </td>
               </tr>
-              {expanded === d.name && (
+              {expanded === d.key && (
                 <tr>
-                  <td colSpan={6}>
+                  <td colSpan={7}>
                     <table className="files-detail">
                       <thead>
                         <tr>
@@ -126,7 +135,8 @@ export default function DatasetTable({ datasets, progress, connected, onChanged 
                 </tr>
               )}
             </Fragment>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

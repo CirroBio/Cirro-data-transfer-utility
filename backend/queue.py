@@ -54,32 +54,33 @@ class TransferQueue:
 
     # ---- enqueue --------------------------------------------------------
 
-    def enqueue(self, names: List[str]) -> List[str]:
+    def enqueue(self, keys: List[str]) -> List[str]:
         queued = []
         with db.write() as conn:
-            for name in names:
+            for key in keys:
                 exists = conn.execute(
-                    "SELECT 1 FROM datasets WHERE name=?", (name,)
+                    "SELECT 1 FROM datasets WHERE key=?", (key,)
                 ).fetchone()
                 if not exists:
                     continue
                 conn.execute(
-                    "INSERT OR IGNORE INTO queue (dataset_name, state) VALUES (?, 'QUEUED')",
-                    (name,),
+                    "INSERT OR IGNORE INTO queue (dataset_key, state) VALUES (?, 'QUEUED')",
+                    (key,),
                 )
                 conn.execute(
-                    "UPDATE datasets SET status=? WHERE name=? AND status NOT IN (?, ?)",
-                    (Status.PENDING, name, Status.DONE, Status.PRESENT),
+                    "UPDATE datasets SET status=? WHERE key=? AND status NOT IN (?, ?)",
+                    (Status.PENDING, key, Status.DONE, Status.PRESENT),
                 )
-                queued.append(name)
+                queued.append(key)
         self._wake.set()
-        broker.publish({"type": "queue", "action": "enqueued", "names": queued})
+        broker.publish({"type": "queue", "action": "enqueued", "keys": queued})
         return queued
 
     def snapshot(self) -> List[Dict]:
         with db.read() as conn:
             rows = conn.execute(
-                "SELECT dataset_name, state, enqueued_at FROM queue ORDER BY id"
+                "SELECT q.dataset_key, d.name, q.state, q.enqueued_at FROM queue q "
+                "LEFT JOIN datasets d ON d.key = q.dataset_key ORDER BY q.id"
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -88,31 +89,31 @@ class TransferQueue:
     def _claim_next(self) -> Optional[str]:
         with db.write() as conn:
             row = conn.execute(
-                "SELECT id, dataset_name FROM queue WHERE state='QUEUED' ORDER BY id LIMIT 1"
+                "SELECT id, dataset_key FROM queue WHERE state='QUEUED' ORDER BY id LIMIT 1"
             ).fetchone()
             if row is None:
                 return None
             conn.execute("UPDATE queue SET state='RUNNING' WHERE id=?", (row["id"],))
-            return row["dataset_name"]
+            return row["dataset_key"]
 
-    def _finish(self, name: str) -> None:
+    def _finish(self, key: str) -> None:
         with db.write() as conn:
-            conn.execute("DELETE FROM queue WHERE dataset_name=?", (name,))
+            conn.execute("DELETE FROM queue WHERE dataset_key=?", (key,))
 
     def _loop(self) -> None:
         while not self._stop.is_set():
-            name = self._claim_next()
-            if name is None:
+            key = self._claim_next()
+            if key is None:
                 self._wake.wait(timeout=2.0)
                 self._wake.clear()
                 continue
             if not self.gateway.connected:
                 # Can't transfer without Cirro; put it back and wait.
                 with db.write() as conn:
-                    conn.execute("UPDATE queue SET state='QUEUED' WHERE dataset_name=?", (name,))
+                    conn.execute("UPDATE queue SET state='QUEUED' WHERE dataset_key=?", (key,))
                 self._wake.wait(timeout=2.0)
                 continue
             try:
-                transfer_dataset(self.gateway, name, self.default_project, broker.publish)
+                transfer_dataset(self.gateway, key, self.default_project, broker.publish)
             finally:
-                self._finish(name)
+                self._finish(key)

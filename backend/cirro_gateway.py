@@ -15,8 +15,21 @@ from typing import Dict, List, Optional
 from backend.config import config
 
 
+_FOLDER_TAG = "folder://"
+
+
 class NotConnected(Exception):
     pass
+
+
+def _dataset_folder(dataset) -> str:
+    """The in-project folder recorded on a Cirro dataset via its folder:// tag,
+    or '' if it carries none."""
+    for tag in getattr(dataset, "tags", None) or []:
+        value = getattr(tag, "value", tag)
+        if isinstance(value, str) and value.startswith(_FOLDER_TAG):
+            return value[len(_FOLDER_TAG):]
+    return ""
 
 
 class CirroGateway:
@@ -131,12 +144,18 @@ class CirroGateway:
                 return p["id"]
         raise ValueError(f"Ingest process (data type) not found: '{name_or_id}'")
 
-    def find_dataset(self, project_id: str, name: str):
+    def find_dataset(self, project_id: str, name: str, folder: str = ""):
         """Return the (most recent) DataPortalDataset with ``name`` in the
-        project, or None."""
+        project, or None.
+
+        A dataset name can recur across folders within one project, so when a
+        folder is given, only datasets carrying the matching ``folder://`` tag
+        are considered (datasets at the project root carry no folder tag)."""
         portal = self._require_portal()
         project = portal.get_project_by_id(project_id)
         matches = [d for d in project.list_datasets() if d.name == name]
+        if folder or any(_dataset_folder(d) for d in matches):
+            matches = [d for d in matches if _dataset_folder(d) == folder]
         if not matches:
             return None
         # Prefer a completed dataset; otherwise the last one listed.

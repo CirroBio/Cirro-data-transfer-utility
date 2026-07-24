@@ -1,5 +1,0 @@
-dataset,source uri,relative path,size,checksum,checksum type
-demo-run-1,https://example.com/sample_R1.fastq.gz,sample_R1.fastq.gz,,,
-demo-run-1,https://example.com/sample_R2.fastq.gz,sample_R2.fastq.gz,,,
-demo-run-1,s3://my-bucket/runs/run1/stats.txt,qc/stats.txt,10485760,,
-demo-run-1,gs://my-bucket/run1/report.pdf,qc/report.pdf,,3b5d5c3712955042212316173ccf37be,md5

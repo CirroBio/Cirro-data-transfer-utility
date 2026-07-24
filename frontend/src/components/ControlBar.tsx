@@ -39,7 +39,7 @@ export default function ControlBar({
     const d = datasetsRef.current?.files?.[0];
     const f = filesRef.current?.files?.[0];
     if (!d || !f) {
-      onError("Choose both the datasets CSV and the files CSV.");
+      onError("Choose both dataset_plan.csv and file_plan.csv.");
       return;
     }
     await guard(() => api.uploadCsv(d, f));
@@ -52,10 +52,11 @@ export default function ControlBar({
         {!connected && <span className="faint" style={{ fontSize: 12 }}>Log in to reconcile & transfer</span>}
       </div>
       <div className="row" style={{ marginBottom: 12 }}>
-        <label className="field">Default project</label>
+        <label className="field">Fallback project</label>
         <select
           value={defaultProject}
           disabled={!connected}
+          title="Used only if a dataset row has no study; normally the study is the project."
           onChange={(e) => {
             onDefaultProject(e.target.value);
             api.setDefaultProject(e.target.value).catch(() => {});
@@ -71,12 +72,12 @@ export default function ControlBar({
       </div>
 
       <div className="row" style={{ marginBottom: 12 }}>
-        <label className="field">datasets.csv</label>
+        <label className="field">dataset_plan.csv</label>
         <input ref={datasetsRef} type="file" accept=".csv" />
-        <label className="field">files.csv</label>
+        <label className="field">file_plan.csv</label>
         <input ref={filesRef} type="file" accept=".csv" />
         <button className="secondary" onClick={loadCsv} disabled={busy}>
-          Load CSVs
+          Load plan
         </button>
       </div>
 

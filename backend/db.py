@@ -17,47 +17,71 @@ from backend.config import config
 # Serialize writes across threads; WAL lets readers proceed in parallel.
 _write_lock = threading.Lock()
 
+# A dataset's identity is (name, folder_path); `key` folds that pair into one
+# string (see schema.dataset_key) and is the join used by files/queue/cache.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS datasets (
-    name         TEXT PRIMARY KEY,
-    project      TEXT,
-    data_type    TEXT NOT NULL,
-    description  TEXT DEFAULT '',
-    folder_path  TEXT,
-    tags_json    TEXT DEFAULT '[]',
-    status       TEXT NOT NULL DEFAULT 'PENDING',
-    error        TEXT,
-    dataset_id   TEXT,
-    updated_at   TEXT DEFAULT (datetime('now'))
+    key             TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,          -- target_dataset_name (Cirro name)
+    study           TEXT NOT NULL,          -- the Cirro project
+    folder_path     TEXT NOT NULL,          -- cirro_folder_path (rooted at study)
+    data_type       TEXT NOT NULL DEFAULT '', -- cirro_type_id (ingest process)
+    cirro_type_name TEXT DEFAULT '',
+    source_kind     TEXT,
+    source_dataset_id TEXT,
+    source_subpath  TEXT,
+    planned_files   INTEGER,
+    planned_bytes   INTEGER,
+    description     TEXT DEFAULT '',
+    tags_json       TEXT DEFAULT '[]',
+    status          TEXT NOT NULL DEFAULT 'PENDING',
+    error           TEXT,
+    dataset_id      TEXT,
+    updated_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS excluded_datasets (
+    study             TEXT NOT NULL,
+    source_dataset_id TEXT NOT NULL,
+    source_kind       TEXT,
+    source_subpath    TEXT,
+    n_files           INTEGER,
+    total_size_bytes  INTEGER,
+    excluded_at       TEXT,
+    PRIMARY KEY (study, source_dataset_id)
 );
 
 CREATE TABLE IF NOT EXISTS files (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    dataset_name      TEXT NOT NULL,
-    source_uri        TEXT NOT NULL,
-    relative_path     TEXT NOT NULL,
+    dataset_key       TEXT NOT NULL,
+    source_uri        TEXT NOT NULL,          -- source_location
+    relative_path     TEXT NOT NULL,          -- target_relative_path
     expected_size     INTEGER,
-    expected_checksum TEXT,
+    expected_checksum TEXT,                    -- file_plan.hash
     checksum_type     TEXT,
+    checksum_encoding TEXT NOT NULL DEFAULT 'hex',
+    source_dataset_id TEXT,
+    source_subpath    TEXT,
+    source_pathname   TEXT,
     verify_tier       TEXT,
     status            TEXT NOT NULL DEFAULT 'PENDING',
     downloaded_bytes  INTEGER NOT NULL DEFAULT 0,
     error             TEXT,
-    UNIQUE (dataset_name, relative_path)
+    UNIQUE (dataset_key, relative_path)
 );
 
 CREATE TABLE IF NOT EXISTS manifest_cache (
     project_id  TEXT NOT NULL,
-    name        TEXT NOT NULL,
+    dataset_key TEXT NOT NULL,
     dataset_id  TEXT,
     files_json  TEXT NOT NULL,
     cached_at   TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (project_id, name)
+    PRIMARY KEY (project_id, dataset_key)
 );
 
 CREATE TABLE IF NOT EXISTS queue (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    dataset_name TEXT NOT NULL UNIQUE,
+    dataset_key  TEXT NOT NULL UNIQUE,
     state        TEXT NOT NULL DEFAULT 'QUEUED',
     enqueued_at  TEXT DEFAULT (datetime('now'))
 );

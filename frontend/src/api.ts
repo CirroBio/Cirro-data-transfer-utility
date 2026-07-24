@@ -1,4 +1,4 @@
-import type { AuthStatus, Dataset, Project, QueueItem, SseEvent } from "./types";
+import type { AuthStatus, Dataset, ExcludedDataset, Project, QueueItem, SseEvent } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -18,6 +18,7 @@ export const api = {
   login: () => fetch("/auth/login", { method: "POST" }).then(json<AuthStatus>),
   projects: () => fetch("/projects").then(json<Project[]>),
   datasets: () => fetch("/datasets").then(json<Dataset[]>),
+  excluded: () => fetch("/excluded").then(json<ExcludedDataset[]>),
   queue: () => fetch("/queue").then(json<QueueItem[]>),
   setDefaultProject: (project: string) =>
     fetch("/config", {
@@ -37,11 +38,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ all: true }),
     }).then(json),
-  transfer: (names: string[]) =>
+  transfer: (keys: string[]) =>
     fetch("/transfer", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ names }),
+      body: JSON.stringify({ keys }),
     }).then(json),
   retryFailed: () =>
     fetch("/retry", {
@@ -49,12 +50,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     }).then(json),
-  uploadCsv: (datasetsFile: File, filesFile: File) => {
+  uploadCsv: (datasetPlan: File, filePlan: File) => {
     const body = new FormData();
-    body.append("datasets", datasetsFile);
-    body.append("files", filesFile);
+    body.append("dataset_plan", datasetPlan);
+    body.append("file_plan", filePlan);
     return fetch("/csv", { method: "POST", body }).then(
-      json<{ loaded: number; datasets: { name: string; files: number }[] }>,
+      json<{ loaded: number; excluded: number; datasets: { key: string; name: string; files: number }[] }>,
     );
   },
 };

@@ -27,13 +27,13 @@ export default function QueuePanel({ queue, progress, checksumMethod }: Props) {
       {queue.map((q) => {
         const running = q.state === "RUNNING";
         return (
-          <div key={q.dataset_name} className="queue-card">
+          <div key={q.dataset_key} className="queue-card">
             <div className="row">
-              <strong>{q.dataset_name}</strong>
+              <strong>{q.name || q.dataset_key}</strong>
               <div className="spacer" />
               <span className={`badge ${running ? "RUNNING" : "PENDING"}`}>{q.state}</span>
             </div>
-            {progress[q.dataset_name] && <div className="progress">{progress[q.dataset_name]}</div>}
+            {progress[q.dataset_key] && <div className="progress">{progress[q.dataset_key]}</div>}
             {running && (
               <div className="bar indeterminate">
                 <span />

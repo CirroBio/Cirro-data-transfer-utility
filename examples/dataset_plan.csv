@@ -1,0 +1,6 @@
+target_dataset_name,study,cirro_folder_path,status,source_kind,source_dataset_id,source_subpath,cirro_type_id,cirro_type_name,n_files,total_size_bytes,total_size_human,excluded_at
+WGS Alignments,pici0001,pici0001,included,gcs_files,pici0001/wgs-align,,aligned_bam,Aligned BAM,2,2048,2.0 KB,
+WGS Alignments,pici0001,pici0001/Batch2,included,gcs_files,pici0001/wgs-align-b2,,aligned_bam,Aligned BAM,1,512,512 B,
+Flow Panel A,pici0001,pici0001/Cytometry,included,gcs_files,pici0001/flow-a,,flow_cytometry_fcs,Flow Cytometry (FCS),2,300,300 B,
+Manifest,pici0002,pici0002,included,gcs_files,pici0002/manifest,,table_csv_tsv,Tables (TSV/CSV),1,64,64 B,
+,pici0002,,excluded,gcs_files,pici0002/Batch PICI_0002_2_Penn_cellengine.csv,,,,174,31704865552,31.7 GB,2026-06-24T14:32:41

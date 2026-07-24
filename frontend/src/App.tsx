@@ -3,8 +3,9 @@ import { api, subscribeEvents } from "./api";
 import AuthPanel from "./components/AuthPanel";
 import ControlBar from "./components/ControlBar";
 import DatasetTable from "./components/DatasetTable";
+import ExcludedPanel from "./components/ExcludedPanel";
 import QueuePanel from "./components/QueuePanel";
-import type { AuthStatus, Dataset, Project, QueueItem, SseEvent } from "./types";
+import type { AuthStatus, Dataset, ExcludedDataset, Project, QueueItem, SseEvent } from "./types";
 
 function humanBytes(n: number): string {
   const u = ["B", "KB", "MB", "GB", "TB"];
@@ -37,6 +38,7 @@ export default function App() {
   });
   const [projects, setProjects] = useState<Project[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [excluded, setExcluded] = useState<ExcludedDataset[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [defaultProject, setDefaultProject] = useState("");
   const [progress, setProgress] = useState<Record<string, string>>({});
@@ -48,6 +50,7 @@ export default function App() {
 
   const refreshData = useCallback(() => {
     api.datasets().then(setDatasets).catch(() => {});
+    api.excluded().then(setExcluded).catch(() => {});
     api.queue().then(setQueue).catch(() => {});
   }, []);
 
@@ -92,14 +95,14 @@ export default function App() {
   useEffect(() => {
     return subscribeEvents((e) => {
       const text = progressText(e);
-      if (text && "name" in e) {
-        setProgress((p) => ({ ...p, [e.name]: text }));
+      if (text && "key" in e) {
+        setProgress((p) => ({ ...p, [e.key]: text }));
       }
       if (e.type === "dataset") {
         if (e.checksum_method) setChecksumMethod(e.checksum_method);
         if (["DONE", "FAILED", "PRESENT"].includes(e.status)) {
           setProgress((p) => {
-            const { [e.name]: _drop, ...rest } = p;
+            const { [e.key]: _drop, ...rest } = p;
             return rest;
           });
         }
@@ -151,6 +154,7 @@ export default function App() {
               connected={connected}
               onChanged={refreshData}
             />
+            <ExcludedPanel excluded={excluded} />
           </div>
           <div>
             <QueuePanel queue={queue} progress={progress} checksumMethod={checksumMethod} />

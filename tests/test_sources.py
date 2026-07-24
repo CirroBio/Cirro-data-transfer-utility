@@ -1,3 +1,4 @@
+import base64
 import hashlib
 from pathlib import Path
 
@@ -38,6 +39,18 @@ def test_tier_csv_wins(tmp_path):
     d = FakeDownloader(data)
     md5 = hashlib.md5(data).hexdigest()
     res = d.download(_spec(expected_checksum=md5, checksum_type="md5"), tmp_path / "f")
+    assert res.verify_tier == VerifyTier.CSV
+
+
+def test_tier_csv_base64_md5(tmp_path):
+    # file_plan.hash is a base64-encoded MD5; the ladder must honor the encoding.
+    data = b"abc123"
+    d = FakeDownloader(data)
+    b64 = base64.b64encode(hashlib.md5(data).digest()).decode()
+    res = d.download(
+        _spec(expected_checksum=b64, checksum_type="md5", checksum_encoding="base64"),
+        tmp_path / "f",
+    )
     assert res.verify_tier == VerifyTier.CSV
 
 

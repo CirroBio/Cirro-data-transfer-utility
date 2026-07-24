@@ -57,18 +57,19 @@ def processes() -> List[dict]:
 # ---- CSV ----------------------------------------------------------------
 
 @app.post("/csv")
-async def upload_csv(datasets: UploadFile, files: UploadFile) -> dict:
-    datasets_text = (await datasets.read()).decode("utf-8-sig")
-    files_text = (await files.read()).decode("utf-8-sig")
+async def upload_csv(dataset_plan: UploadFile, file_plan: UploadFile) -> dict:
+    dataset_text = (await dataset_plan.read()).decode("utf-8-sig")
+    file_text = (await file_plan.read()).decode("utf-8-sig")
     known = gateway.process_identifiers() if gateway.connected else None
     try:
-        specs = csv_loader.load(datasets_text, files_text, known_processes=known)
+        specs, excluded = csv_loader.load(dataset_text, file_text, known_processes=known)
     except csv_loader.CsvError as exc:
         raise HTTPException(status_code=422, detail={"errors": exc.errors})
-    csv_loader.persist(specs)
+    csv_loader.persist(specs, excluded)
     return {
         "loaded": len(specs),
-        "datasets": [{"name": s.name, "files": len(s.files)} for s in specs],
+        "excluded": len(excluded),
+        "datasets": [{"key": s.key, "name": s.name, "files": len(s.files)} for s in specs],
     }
 
 
@@ -77,19 +78,47 @@ async def upload_csv(datasets: UploadFile, files: UploadFile) -> dict:
 @app.get("/datasets")
 def datasets() -> List[dict]:
     with db.read() as conn:
-        rows = conn.execute("SELECT * FROM datasets ORDER BY name").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM datasets ORDER BY study, folder_path, name"
+        ).fetchall()
         out = []
         for r in rows:
             files = conn.execute(
                 "SELECT relative_path, source_uri, expected_size, status, verify_tier, "
-                "downloaded_bytes FROM files WHERE dataset_name=? ORDER BY relative_path",
-                (r["name"],),
+                "downloaded_bytes FROM files WHERE dataset_key=? ORDER BY relative_path",
+                (r["key"],),
             ).fetchall()
             item = dict(r)
             item["tags"] = json.loads(item.pop("tags_json") or "[]")
             item["files"] = [dict(f) for f in files]
             out.append(item)
     return out
+
+
+@app.get("/excluded")
+def excluded_datasets() -> List[dict]:
+    with db.read() as conn:
+        rows = conn.execute(
+            "SELECT * FROM excluded_datasets ORDER BY study, source_dataset_id"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@app.get("/folders")
+def folders() -> dict:
+    """Level-3 view: the folder tree grouped by study, with a dataset count per
+    folder."""
+    with db.read() as conn:
+        rows = conn.execute(
+            "SELECT study, folder_path, COUNT(*) n FROM datasets "
+            "GROUP BY study, folder_path ORDER BY study, folder_path"
+        ).fetchall()
+    tree: dict = {}
+    for r in rows:
+        tree.setdefault(r["study"], []).append(
+            {"folder_path": r["folder_path"], "datasets": r["n"]}
+        )
+    return tree
 
 
 @app.post("/reconcile")
@@ -106,34 +135,34 @@ def transfer(body: dict = Body(default={})) -> dict:
     _require_connected()
     if body.get("all"):
         with db.read() as conn:
-            names = [
-                r["name"]
+            keys = [
+                r["key"]
                 for r in conn.execute(
-                    "SELECT name FROM datasets WHERE status IN (?, ?, ?)",
+                    "SELECT key FROM datasets WHERE status IN (?, ?, ?)",
                     (Status.PENDING, Status.MISMATCH, Status.FAILED),
                 ).fetchall()
             ]
     else:
-        names = body.get("names") or []
-    queued = transfer_queue.enqueue(names)
+        keys = body.get("keys") or []
+    queued = transfer_queue.enqueue(keys)
     return {"queued": queued}
 
 
 @app.post("/retry")
 def retry(body: dict = Body(default={})) -> dict:
     _require_connected()
-    name = body.get("name")
-    if name:
-        names = [name]
+    key = body.get("key")
+    if key:
+        keys = [key]
     else:
         with db.read() as conn:
-            names = [
-                r["name"]
+            keys = [
+                r["key"]
                 for r in conn.execute(
-                    "SELECT name FROM datasets WHERE status=?", (Status.FAILED,)
+                    "SELECT key FROM datasets WHERE status=?", (Status.FAILED,)
                 ).fetchall()
             ]
-    return {"queued": transfer_queue.enqueue(names)}
+    return {"queued": transfer_queue.enqueue(keys)}
 
 
 @app.get("/queue")

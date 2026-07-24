@@ -21,11 +21,17 @@ export interface FileRow {
 }
 
 export interface Dataset {
+  key: string;
   name: string;
-  project: string | null;
-  data_type: string;
+  study: string;           // the Cirro project
+  folder_path: string;     // cirro_folder_path (rooted at study)
+  data_type: string;       // cirro_type_id
+  cirro_type_name: string;
+  source_kind: string | null;
+  source_dataset_id: string | null;
+  planned_files: number | null;
+  planned_bytes: number | null;
   description: string;
-  folder_path: string | null;
   tags: string[];
   status: string;
   error: string | null;
@@ -33,14 +39,24 @@ export interface Dataset {
   files: FileRow[];
 }
 
+export interface ExcludedDataset {
+  study: string;
+  source_dataset_id: string;
+  source_kind: string | null;
+  n_files: number | null;
+  total_size_bytes: number | null;
+  excluded_at: string | null;
+}
+
 export interface QueueItem {
-  dataset_name: string;
+  dataset_key: string;
+  name: string | null;
   state: string;
   enqueued_at: string;
 }
 
 export type SseEvent =
-  | { type: "dataset"; name: string; status: string; error?: string; dataset_id?: string; checksum_method?: string }
-  | { type: "progress"; name: string; phase: "download" | "upload"; file?: string; bytes?: number; total?: number | null; done?: number; resume?: boolean }
-  | { type: "queue"; action: string; names: string[] }
-  | { type: "warning"; name: string; message: string };
+  | { type: "dataset"; key: string; name: string; status: string; error?: string; dataset_id?: string; checksum_method?: string }
+  | { type: "progress"; key: string; name: string; phase: "download" | "upload"; file?: string; bytes?: number; total?: number | null; done?: number; resume?: boolean }
+  | { type: "queue"; action: string; keys: string[] }
+  | { type: "warning"; key: string; name: string; message: string };
