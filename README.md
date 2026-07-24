@@ -57,10 +57,11 @@ npm run build      # produces frontend/dist, served by the backend
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.app:app --port 8000
+uvicorn backend.app:app --port 8000 --env-file .env
 # open http://localhost:8000
 ```
 
+`--env-file .env` is optional; drop it if you export the config another way.
 For frontend development with hot reload, run `npm run dev` in `frontend/`
 (it proxies API calls to the backend on :8000).
 
@@ -71,6 +72,64 @@ For frontend development with hot reload, run `npm run dev` in `frontend/`
 | `CIRRO_BASE_URL` | `app.cirro.bio` | Cirro tenant host |
 | `CIRRO_TRANSFER_HOME` | `~/.cirro-transfer` | SQLite DB + staging tempdirs |
 | `CIRRO_TRANSFER_CONCURRENCY` | `1` | Datasets transferred in parallel |
+
+Copy `.env.example` to `.env` for the non-secret config above. It is **not**
+where credentials go — see below.
+
+## Credentials
+
+There are two kinds of credentials, and neither is typed into the app: the app
+has no field for source secrets, and Cirro uses an interactive login.
+
+**Cirro (upload) — nothing to configure.** Click *Log in* in the app and
+complete the device code in your browser once. The token is cached (under
+`~/.cirro/`) and survives restarts. Do not put Cirro credentials in the
+environment.
+
+**Sources (download) — use the SDK's ambient credentials.** Each scheme
+resolves its own credentials; the app never sees them:
+
+| Scheme | Auth | Where the credential lives |
+| --- | --- | --- |
+| `gs://` | Application Default Credentials, else anonymous | ambient (ADC) |
+| `s3://` | standard AWS chain, else unsigned | ambient (env / `~/.aws`) |
+| `https://` | none (plain GET) | the URL itself — public or presigned |
+| `ftp://`, `sftp://` | `user:pass` from the URI | embedded in `source_location` |
+
+The transfer worker is a single background process, so **whatever environment
+you launch `uvicorn` from is what every transfer uses**. Set source credentials
+in that shell, then start the server from it.
+
+GCS (this project's data lives in `gs://`), easiest first — a user login that
+self-refreshes with no key file:
+
+```bash
+gcloud auth application-default login
+```
+
+To act as a short-lived service account instead:
+
+```bash
+gcloud auth application-default login --impersonate-service-account=SA_EMAIL@PROJECT.iam.gserviceaccount.com
+```
+
+If you were handed a key file to use temporarily, point ADC at it and delete it
+when done:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/temp-key.json
+```
+
+S3 temporary (STS) credentials are read straight from the environment:
+
+```bash
+export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
+```
+
+Prefer the native credential stores (`gcloud` ADC, `~/.aws`) over raw keys in
+`.env`; short-lived STS values in `.env` are an acceptable dev exception since
+they expire on their own. Note that `ftp://`/`sftp://` carry the password in
+`source_location` — treat any plan CSV using them as a secret.
 
 ## Usage
 

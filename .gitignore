@@ -11,6 +11,9 @@ frontend/dist/
 # App data (SQLite DB, staging tempdirs)
 .cirro-transfer/
 
+# Local env config (may hold short-lived credentials)
+.env
+
 # OS / editor
 .DS_Store
 frontend/*.tsbuildinfo
