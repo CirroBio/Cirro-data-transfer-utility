@@ -14,6 +14,10 @@ frontend/dist/
 # Local env config (may hold short-lived credentials)
 .env
 
+# Raw S3 listings and generated test plans (not committed)
+TEMP
+testdata/
+
 # OS / editor
 .DS_Store
 frontend/*.tsbuildinfo
