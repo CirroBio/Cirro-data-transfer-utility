@@ -73,7 +73,7 @@ def main() -> int:
     ap.add_argument("--folder", default="Data Transfer Testing/Batch A",
                     help="cirro_folder_path for every dataset; its first segment "
                          "is the study (== Cirro project)")
-    ap.add_argument("--type-id", default="files",
+    ap.add_argument("--type-id", default="custom_dataset",
                     help="cirro_type_id (must match a real ingest process to transfer)")
     ap.add_argument("--type-name", default="Files")
     ap.add_argument("--max-files", type=int, default=100,

@@ -57,13 +57,44 @@ npm run build      # produces frontend/dist, served by the backend
 
 ```bash
 source .venv/bin/activate
-uvicorn backend.app:app --port 8000 --env-file .env
+set -a; . ./.env; set +a          # export the config + source credentials
+uvicorn backend.app:app --port 8000
 # open http://localhost:8000
 ```
 
-`--env-file .env` is optional; drop it if you export the config another way.
-For frontend development with hot reload, run `npm run dev` in `frontend/`
-(it proxies API calls to the backend on :8000).
+Source `.env` rather than passing `--env-file .env`: uvicorn loads that file
+with `load_dotenv()`, which does **not** override variables already exported in
+your shell, so a stale `AWS_*` left over from an earlier session silently wins
+over the file (the resulting failure surfaces as an opaque `403`, because the
+S3 downloader retries unsigned when a signed request fails).
+
+### Live reload
+
+Two servers, one per side. Backend, restarting on any Python change:
+
+```bash
+set -a; . ./.env; set +a
+uvicorn backend.app:app --port 8000 --reload --timeout-graceful-shutdown 1
+```
+
+`--timeout-graceful-shutdown 1` is not optional here: the SPA holds `/events`
+open as an SSE stream, and without a shutdown deadline every reload stalls at
+`Waiting for connections to close` until you close the browser tab.
+
+Frontend, in a second shell — Vite serves the SPA with hot module replacement
+and proxies API paths to the backend on :8000. Open the URL it prints (:5173
+unless that port is taken), **not** :8000, which serves the last
+`npm run build` output and won't reflect your edits:
+
+```bash
+cd frontend
+npm run dev
+```
+
+`--reload` restarts the whole process, which kills the transfer worker thread
+along with any transfer in flight. A dataset interrupted this way resumes on
+retry (its uploaded files are skipped), but avoid editing backend code during a
+long transfer.
 
 ### Configuration (environment variables)
 
@@ -73,8 +104,8 @@ For frontend development with hot reload, run `npm run dev` in `frontend/`
 | `CIRRO_TRANSFER_HOME` | `~/.cirro-transfer` | SQLite DB + staging tempdirs |
 | `CIRRO_TRANSFER_CONCURRENCY` | `1` | Datasets transferred in parallel |
 
-Copy `.env.example` to `.env` for the non-secret config above. It is **not**
-where credentials go — see below.
+Copy `.env.example` to `.env` for the config above. Cirro credentials never go
+there; short-lived source credentials may — see below.
 
 ## Credentials
 
@@ -96,9 +127,45 @@ resolves its own credentials; the app never sees them:
 | `https://` | none (plain GET) | the URL itself — public or presigned |
 | `ftp://`, `sftp://` | `user:pass` from the URI | embedded in `source_location` |
 
-The transfer worker is a single background process, so **whatever environment
-you launch `uvicorn` from is what every transfer uses**. Set source credentials
-in that shell, then start the server from it.
+The transfer worker is a background thread of the server process, so **whatever
+environment you launch `uvicorn` from is what every transfer uses**. Set source
+credentials in that shell (or in `.env`, sourced as shown under *Run*), then
+start the server from it. The values are read at process start, so restart the
+server after refreshing an expiring credential.
+
+### Credentials entered through the UI
+
+For a deployment where the browser is the only input channel, the *Source
+Credentials* panel accepts them at runtime instead:
+
+| Provider | Fields | Applied to |
+| --- | --- | --- |
+| AWS | access key id, secret, optional session token, optional region | `s3://` |
+| Google Cloud | service account key (JSON) | `gs://` |
+
+The *Cirro Connection* panel likewise takes the tenant host (`Use tenant`), so
+`CIRRO_BASE_URL` need not be baked into the environment. Changing tenants
+requires logging out first — the SDK client and its cached token are bound to
+one tenant. Cirro's own auth is unchanged: the SDK's device-code login.
+
+What this does and does not guarantee:
+
+- **In memory only.** `backend/credentials.py` holds them in the process; they
+  are never written to SQLite, never to disk, and never into log lines, error
+  messages, or SSE events. A restart clears them — expect to re-enter after any
+  reload, including `--reload` picking up a code change.
+- **No read path.** `GET /credentials` returns presence plus a non-reversible
+  hint (an access key id's last 4, a service account's `client_email`). The
+  secrets cannot be read back out of the API.
+- **Passed explicitly, not exported.** Values go to each `boto3`/`google-cloud`
+  client call rather than into `os.environ`, so they cannot leak into
+  subprocesses or race across worker threads.
+- **Transport is your responsibility.** The form posts over whatever the app is
+  served on. On anything other than `localhost`, terminate TLS in front of it —
+  otherwise the secret crosses the network in cleartext. The panel shows a
+  warning when it detects a non-local host over plain HTTP.
+- Anything left unset falls back to the ambient chain, then to anonymous access
+  for public objects — so a public-bucket migration needs no credentials at all.
 
 GCS (this project's data lives in `gs://`), easiest first — a user login that
 self-refreshes with no key file:
@@ -120,7 +187,8 @@ when done:
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/temp-key.json
 ```
 
-S3 temporary (STS) credentials are read straight from the environment:
+S3 temporary (STS) credentials are read straight from the environment, either
+exported directly or written to `.env` (see `.env.example`) and sourced:
 
 ```bash
 export AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_SESSION_TOKEN=...
