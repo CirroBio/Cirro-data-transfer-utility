@@ -18,11 +18,12 @@ class Status:
     PRESENT = "PRESENT"        # already in Cirro and validated
     MISMATCH = "MISMATCH"      # in Cirro but files/sizes differ from the spec
     FAILED = "FAILED"
+    CANCELLED = "CANCELLED"    # stopped on request; re-enqueue to resume
 
     # Statuses an in-flight worker may leave behind after a crash.
     IN_FLIGHT = {VALIDATING, DOWNLOADING, UPLOADING, VERIFYING}
     # Statuses eligible to be (re)enqueued for transfer.
-    TRANSFERABLE = {PENDING, MISMATCH, FAILED}
+    TRANSFERABLE = {PENDING, MISMATCH, FAILED, CANCELLED}
 
 
 # Verification tiers, strongest first — recorded per file so the UI can show

@@ -1,4 +1,4 @@
-"""SQLite persistence: manifest cache + transfer queue + per-dataset state.
+"""SQLite persistence: the loaded plan, the transfer queue, and per-dataset state.
 
 Everything the app needs to resume after a restart lives here. A fresh
 connection is opened per operation (cheap for a local single-user app) with
@@ -10,7 +10,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Dict, Iterator, Optional
 
 from backend.config import config
 
@@ -70,15 +70,6 @@ CREATE TABLE IF NOT EXISTS files (
     UNIQUE (dataset_key, relative_path)
 );
 
-CREATE TABLE IF NOT EXISTS manifest_cache (
-    project_id  TEXT NOT NULL,
-    dataset_key TEXT NOT NULL,
-    dataset_id  TEXT,
-    files_json  TEXT NOT NULL,
-    cached_at   TEXT DEFAULT (datetime('now')),
-    PRIMARY KEY (project_id, dataset_key)
-);
-
 CREATE TABLE IF NOT EXISTS queue (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     dataset_key  TEXT NOT NULL UNIQUE,
@@ -99,6 +90,19 @@ def _connect(db_path: Optional[Path] = None) -> sqlite3.Connection:
 def init_db(db_path: Optional[Path] = None) -> None:
     with _connect(db_path) as conn:
         conn.executescript(SCHEMA)
+
+
+def clear_plan() -> Dict[str, int]:
+    """Drop the loaded plan and everything derived from it, returning the row
+    counts removed. Local state only — datasets already in Cirro are untouched.
+    """
+    tables = ["files", "datasets", "excluded_datasets", "queue"]
+    removed: Dict[str, int] = {}
+    with write() as conn:
+        for table in tables:
+            removed[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            conn.execute(f"DELETE FROM {table}")
+    return removed
 
 
 @contextmanager

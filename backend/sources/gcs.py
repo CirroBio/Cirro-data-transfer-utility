@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
+from backend.credentials import credentials
 from backend.sources.base import Downloader, ProgressCb
 from backend.sources.checksum import Checksum, MultiHasher, StatResult
 
@@ -30,13 +31,20 @@ class GcsDownloader(Downloader):
     schemes = {"gs"}
 
     def _bucket(self, bucket_name: str):
-        from google.cloud import storage
         from google.auth.exceptions import DefaultCredentialsError
+        from google.cloud import storage
 
-        try:
-            client = storage.Client()
-        except (DefaultCredentialsError, EnvironmentError):
-            client = storage.Client.create_anonymous_client()
+        # UI-supplied service account wins; otherwise ADC, then anonymous.
+        supplied = credentials.gcp_credentials()
+        if supplied is not None:
+            client = storage.Client(
+                credentials=supplied, project=credentials.gcp_project()
+            )
+        else:
+            try:
+                client = storage.Client()
+            except (DefaultCredentialsError, EnvironmentError):
+                client = storage.Client.create_anonymous_client()
         return client.bucket(bucket_name)
 
     def _get_blob(self, uri: str):

@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import csv_loader, db, reconcile
 from backend.cirro_gateway import gateway
+from backend.credentials import CredentialError, credentials
 from backend.config import config
 from backend.events import broker
 from backend.models import Status
@@ -38,6 +39,62 @@ def auth_login() -> dict:
 @app.get("/auth/status")
 def auth_status() -> dict:
     return gateway.auth_status()
+
+
+@app.post("/auth/logout")
+def auth_logout() -> dict:
+    gateway.logout()
+    return gateway.auth_status()
+
+
+@app.post("/auth/base-url")
+def set_base_url(body: dict = Body(default={})) -> dict:
+    """Repoint at another Cirro tenant (host only, no scheme)."""
+    try:
+        gateway.set_base_url(body.get("base_url", ""))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return gateway.auth_status()
+
+
+# ---- source credentials -------------------------------------------------
+
+@app.get("/credentials")
+def credentials_status() -> dict:
+    """Presence and a short hint per provider. Secrets have no read path."""
+    return credentials.status()
+
+
+@app.post("/credentials/aws")
+def set_aws_credentials(body: dict = Body(default={})) -> dict:
+    try:
+        credentials.set_aws(
+            access_key_id=body.get("access_key_id", ""),
+            secret_access_key=body.get("secret_access_key", ""),
+            session_token=body.get("session_token") or None,
+            region=body.get("region") or None,
+        )
+    except CredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return credentials.status()
+
+
+@app.post("/credentials/gcp")
+def set_gcp_credentials(body: dict = Body(default={})) -> dict:
+    try:
+        credentials.set_gcp_service_account(body.get("service_account_json", ""))
+    except CredentialError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return credentials.status()
+
+
+@app.delete("/credentials/{provider}")
+def clear_credentials(provider: str) -> dict:
+    try:
+        credentials.clear(provider)
+    except CredentialError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return credentials.status()
 
 
 # ---- browse -------------------------------------------------------------
@@ -95,6 +152,21 @@ def datasets() -> List[dict]:
     return out
 
 
+@app.delete("/datasets")
+def clear_datasets() -> dict:
+    """Forget the loaded plan (datasets, files, queue, cache). Nothing in Cirro
+    is deleted. Refused while a transfer is in flight, which would leave the
+    worker operating on rows that no longer exist."""
+    in_flight = [q for q in transfer_queue.snapshot() if q["state"] == "RUNNING"]
+    if in_flight:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A transfer is running ({in_flight[0]['dataset_key']}). "
+                   "Wait for it to finish before clearing.",
+        )
+    return {"cleared": db.clear_plan()}
+
+
 @app.get("/excluded")
 def excluded_datasets() -> List[dict]:
     with db.read() as conn:
@@ -134,12 +206,14 @@ def do_reconcile(body: dict = Body(default={})) -> List[dict]:
 def transfer(body: dict = Body(default={})) -> dict:
     _require_connected()
     if body.get("all"):
+        transferable = sorted(Status.TRANSFERABLE)
+        placeholders = ",".join("?" * len(transferable))
         with db.read() as conn:
             keys = [
                 r["key"]
                 for r in conn.execute(
-                    "SELECT key FROM datasets WHERE status IN (?, ?, ?)",
-                    (Status.PENDING, Status.MISMATCH, Status.FAILED),
+                    f"SELECT key FROM datasets WHERE status IN ({placeholders})",
+                    tuple(transferable),
                 ).fetchall()
             ]
     else:
@@ -163,6 +237,17 @@ def retry(body: dict = Body(default={})) -> dict:
                 ).fetchall()
             ]
     return {"queued": transfer_queue.enqueue(keys)}
+
+
+@app.post("/cancel")
+def cancel(body: dict = Body(default={})) -> dict:
+    """Stop transfers. Queued datasets never start; a running one stops at its
+    next file boundary. Does not require a Cirro connection."""
+    if body.get("all"):
+        keys = [q["dataset_key"] for q in transfer_queue.snapshot()]
+    else:
+        keys = body.get("keys") or []
+    return transfer_queue.cancel(keys)
 
 
 @app.get("/queue")

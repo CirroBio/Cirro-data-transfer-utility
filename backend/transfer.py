@@ -18,16 +18,26 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from backend import cache, db
+from backend import db
 from backend.config import config
 from backend.cirro_gateway import CirroGateway
 from backend.models import Status
 from backend.sources import registry
 
 Emit = Callable[[Dict], None]
+
+# Byte-level progress is emitted at most this often per file. Unthrottled, a
+# large file emits one event per 1 MiB chunk, which floods each SSE subscriber's
+# bounded queue and starves the per-file and status events the UI needs.
+_BYTE_PROGRESS_INTERVAL_SECONDS = 0.25
+
+
+class _Cancelled(Exception):
+    """Raised internally when a stop was requested; never leaves this module."""
 
 
 def _safe_dirname(name: str) -> str:
@@ -70,20 +80,36 @@ def _update_file(key: str, rel: str, **fields) -> None:
 
 
 def transfer_dataset(
-    gateway: CirroGateway, key: str, default_project: Optional[str], emit: Emit
+    gateway: CirroGateway,
+    key: str,
+    default_project: Optional[str],
+    emit: Emit,
+    is_cancelled: Optional[Callable[[], bool]] = None,
 ) -> str:
     """Run one dataset end-to-end. Returns the final status. Never raises —
-    failures are recorded as FAILED and returned."""
+    failures are recorded as FAILED and returned.
+
+    ``is_cancelled`` is polled at each file boundary; when it turns true the
+    transfer stops and the dataset is left CANCELLED. Work already done is kept:
+    downloaded files stay staged and an uploaded-but-unfinalized Cirro dataset
+    keeps its id, so re-enqueueing resumes rather than restarts.
+    """
     ds = _load(key)
     if ds is None:
         return Status.FAILED
     name = ds["name"]
+    cancelled = is_cancelled or (lambda: False)
 
     def status(new: str, **extra) -> None:
         _set_status(key, new, error=extra.get("error"))
         emit({"type": "dataset", "key": key, "name": name, "status": new, **extra})
 
+    def stop_if_cancelled() -> None:
+        if cancelled():
+            raise _Cancelled()
+
     try:
+        stop_if_cancelled()
         project_ref = ds["study"] or default_project
         if not project_ref:
             raise ValueError("No study/project set for this dataset")
@@ -100,27 +126,43 @@ def transfer_dataset(
 
         # --- DOWNLOADING ---------------------------------------------------
         status(Status.DOWNLOADING)
-        for f in ds["files"]:
+        total_files = len(ds["files"])
+        for downloaded_files, f in enumerate(ds["files"], start=1):
+            stop_if_cancelled()
             rel = f["relative_path"]
             dest = staging / rel
             _update_file(key, rel, status=Status.DOWNLOADING, downloaded_bytes=0)
 
-            state = {"n": 0}
+            state = {"bytes": 0, "emitted_at": 0.0}
 
             def on_bytes(delta: int, rel=rel, state=state, f=f) -> None:
-                state["n"] += delta
+                state["bytes"] += delta
+                now = time.monotonic()
+                if now - state["emitted_at"] < _BYTE_PROGRESS_INTERVAL_SECONDS:
+                    return
+                state["emitted_at"] = now
                 emit({
                     "type": "progress", "key": key, "name": name, "phase": "download",
-                    "file": rel, "bytes": state["n"], "total": f["expected_size"],
+                    "file": rel, "bytes": state["bytes"], "total": f["expected_size"],
                 })
 
             result = registry.download(
                 registry_spec(f), dest, on_bytes  # type: ignore[arg-type]
             )
             _update_file(
-                key, rel, status="DONE", downloaded_bytes=result.size,
+                key, rel, status=Status.DONE, downloaded_bytes=result.size,
                 verify_tier=result.verify_tier,
             )
+            # The files table just changed, but the UI only refetches /datasets on
+            # dataset-level events — so report the new count directly.
+            emit({
+                "type": "file", "key": key, "name": name, "phase": "download",
+                "file": rel, "done": downloaded_files, "total": total_files,
+            })
+
+        # Last point at which nothing has been created in Cirro yet — stopping
+        # here leaves no trace on the tenant.
+        stop_if_cancelled()
 
         # --- create (persist id BEFORE upload) or resume -------------------
         dataset_id = ds["dataset_id"]
@@ -145,20 +187,27 @@ def transfer_dataset(
         # --- UPLOADING (S3 verifies CRC64NVME server-side) -----------------
         status(Status.UPLOADING, checksum_method=gateway.checksum_method())
         if not skip_upload:
-            _upload(gateway, project_id, dataset_id, staging, rel_paths, resume, key, name, emit)
+            _upload(gateway, project_id, dataset_id, staging, rel_paths, resume, key, name,
+                    emit, stop_if_cancelled)
 
         # --- VERIFYING (end-to-end checksum confirmation) ------------------
         status(Status.VERIFYING)
+        gateway.wait_for_ingest(project_id, dataset_id)
         size_only = gateway.validate_uploaded_files(project_id, dataset_id, staging, rel_paths)
         if size_only:
             emit({"type": "warning", "key": key, "name": name,
                   "message": f"{len(size_only)} file(s) verified by size only (no remote checksum)"})
 
         # --- DONE ----------------------------------------------------------
-        cache.invalidate(project_id, key)
         shutil.rmtree(staging, ignore_errors=True)
         status(Status.DONE, dataset_id=dataset_id)
         return Status.DONE
+
+    except _Cancelled:
+        # Staging and any created dataset id are deliberately left in place so a
+        # re-enqueue resumes instead of re-downloading and re-uploading.
+        status(Status.CANCELLED)
+        return Status.CANCELLED
 
     except Exception as exc:  # noqa: BLE001 - reported to the UI, worker continues
         status(Status.FAILED, error=str(exc))
@@ -175,20 +224,23 @@ def _upload(
     key: str,
     name: str,
     emit: Emit,
+    stop_if_cancelled: Callable[[], None],
 ) -> None:
     total = len(rel_paths)
     if resume:
-        # One call; the SDK skips files already uploaded (by size).
+        # One call; the SDK skips files already uploaded (by size). Not
+        # interruptible — the SDK drives the whole batch itself.
         emit({"type": "progress", "key": key, "name": name, "phase": "upload",
               "resume": True, "total": total})
         gateway.upload_files(project_id, dataset_id, str(staging), rel_paths, resume=True)
-        emit({"type": "progress", "key": key, "name": name, "phase": "upload",
-              "done": total, "total": total})
+        emit({"type": "file", "key": key, "name": name, "phase": "upload",
+              "file": "", "done": total, "total": total})
         return
     # Fresh upload: drive file-by-file so we can report per-file completion.
     for i, rel in enumerate(rel_paths, start=1):
+        stop_if_cancelled()
         gateway.upload_files(project_id, dataset_id, str(staging), [rel], resume=False)
-        emit({"type": "progress", "key": key, "name": name, "phase": "upload",
+        emit({"type": "file", "key": key, "name": name, "phase": "upload",
               "file": rel, "done": i, "total": total})
 
 

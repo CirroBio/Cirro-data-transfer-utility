@@ -9,13 +9,41 @@ resume an interrupted upload).
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional, TypeVar
 
 from backend.config import config
 
 
 _FOLDER_TAG = "folder://"
+
+# Cirro's API gateway throttles per tenant, so a burst from anywhere (this app,
+# the web UI, another client) can 429 any single request. The SDK has no
+# backoff of its own, so retry here rather than failing a whole transfer.
+_THROTTLE_STATUS = 429
+_THROTTLE_BACKOFF = (1, 2, 4, 8, 16)
+
+# An upload lands before Cirro's ingest registers the dataset's files; asking
+# for them during that window reports every path as missing.
+_INGEST_POLL_SECONDS = 5
+_INGEST_TIMEOUT_SECONDS = 900
+
+T = TypeVar("T")
+
+
+def _retry_throttled(call: Callable[[], T]) -> T:
+    """Run ``call``, retrying with backoff while Cirro's API returns 429."""
+    from cirro_api_client.v1.errors import UnexpectedStatus
+
+    for delay in _THROTTLE_BACKOFF:
+        try:
+            return call()
+        except UnexpectedStatus as exc:
+            if exc.status_code != _THROTTLE_STATUS:
+                raise
+            time.sleep(delay)
+    return call()
 
 
 class NotConnected(Exception):
@@ -88,6 +116,39 @@ class CirroGateway:
             self.user = None
         self.auth_message = None
         self.status = "connected"
+
+    def set_base_url(self, base_url: str) -> None:
+        """Point at a different Cirro tenant.
+
+        Only while disconnected: the SDK client and its cached token are bound
+        to a tenant, so switching under a live session would leave the two
+        disagreeing. Log out (or restart) first.
+        """
+        base_url = (base_url or "").strip().rstrip("/")
+        if not base_url:
+            raise ValueError("Base URL is required")
+        if "://" in base_url:
+            raise ValueError("Host only, without a scheme (e.g. app.cirro.bio)")
+        with self._lock:
+            if self.status == "connected":
+                raise ValueError("Log out before changing the Cirro tenant")
+            self.base_url = base_url
+            self._login = None
+            self.auth_message = None
+            self.error = None
+            self.status = "disconnected"
+
+    def logout(self) -> None:
+        """Drop this process's Cirro session. The SDK's on-disk token cache is
+        left alone, so a later login can still skip the device flow."""
+        with self._lock:
+            self._login = None
+            self._portal = None
+            self._client = None
+            self.user = None
+            self.auth_message = None
+            self.error = None
+            self.status = "disconnected"
 
     def auth_status(self) -> Dict:
         return {
@@ -195,9 +256,9 @@ class CirroGateway:
             expected_files=files,
             tags=[Tag(value=t) for t in tags],
         )
-        resp = self._require_client().datasets.create(
+        resp = _retry_throttled(lambda: self._require_client().datasets.create(
             project_id=project_id, upload_request=request
-        )
+        ))
         return resp.id
 
     def upload_files(
@@ -208,19 +269,40 @@ class CirroGateway:
         files: List[str],
         resume: bool = False,
     ) -> None:
-        self._require_client().datasets.upload_files(
+        _retry_throttled(lambda: self._require_client().datasets.upload_files(
             project_id=project_id,
             dataset_id=dataset_id,
             directory=directory,
             files=files,
             resume=resume,
-        )
+        ))
 
     def dataset_status(self, project_id: str, dataset_id: str) -> str:
-        detail = self._require_client().datasets.get(project_id, dataset_id)
+        detail = _retry_throttled(
+            lambda: self._require_client().datasets.get(project_id, dataset_id)
+        )
         status = getattr(detail, "status", "")
         # Normalize an enum (Status.PENDING) or string to its bare value.
         return str(getattr(status, "value", None) or status).upper()
+
+    def wait_for_ingest(self, project_id: str, dataset_id: str) -> str:
+        """Block until Cirro finishes registering an uploaded dataset's files.
+
+        Returns the settled status. Raises if ingest fails or does not settle
+        within _INGEST_TIMEOUT_SECONDS."""
+        deadline = time.monotonic() + _INGEST_TIMEOUT_SECONDS
+        while True:
+            status = self.dataset_status(project_id, dataset_id)
+            if status == "FAILED":
+                raise ValueError(f"Cirro ingest failed for dataset {dataset_id}")
+            if status != "PENDING":
+                return status
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Cirro dataset {dataset_id} still PENDING after "
+                    f"{_INGEST_TIMEOUT_SECONDS}s of ingest"
+                )
+            time.sleep(_INGEST_POLL_SECONDS)
 
     def checksum_method(self) -> str:
         return self._require_client().configuration.checksum_method_display
@@ -237,9 +319,9 @@ class CirroGateway:
         size_only: List[str] = []
         for rel in rel_paths:
             local = directory / rel
-            cirro_file = dataset.get_file(rel)
+            cirro_file = _retry_throttled(lambda rel=rel: dataset.get_file(rel))
             try:
-                cirro_file.validate(str(local))
+                _retry_throttled(lambda: cirro_file.validate(str(local)))
             except RuntimeWarning:
                 # Remote checksum unavailable — fall back to a size comparison.
                 if cirro_file.size_bytes != local.stat().st_size:

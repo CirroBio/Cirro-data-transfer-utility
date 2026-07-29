@@ -11,6 +11,7 @@ from botocore import UNSIGNED
 from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError, NoCredentialsError
 
+from backend.credentials import credentials
 from backend.sources.base import Downloader, ProgressCb
 from backend.sources.checksum import Checksum, MultiHasher, StatResult
 
@@ -32,10 +33,23 @@ def _split(uri: str) -> Tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
+def _etag_is_md5(head: dict) -> bool:
+    """Whether this object's ETag can be read as an MD5 of its contents.
+
+    Not true under SSE-KMS or SSE-C: those ETags are unrelated to the plaintext
+    digest (Cirro project buckets are KMS-encrypted, so this is the common
+    case). SSE-S3 ('AES256') and unencrypted objects keep ETag == MD5.
+    """
+    return (head.get("ServerSideEncryption") != "aws:kms"
+            and not head.get("SSECustomerAlgorithm"))
+
+
 def _checksum_from_head(head: dict) -> Optional[Checksum]:
     for field, algo in _S3_CHECKSUM_FIELDS.items():
         if head.get(field):
             return Checksum.make(algo, head[field], encoding="base64")
+    if not _etag_is_md5(head):
+        return None
     etag = (head.get("ETag") or "").strip('"')
     m = _MD5_HEX.match(etag)
     if m:  # single-part upload -> ETag is the hex MD5
@@ -49,7 +63,8 @@ class S3Downloader(Downloader):
     def _client(self, anonymous: bool = False):
         if anonymous:
             return boto3.client("s3", config=BotoConfig(signature_version=UNSIGNED))
-        return boto3.client("s3")
+        # UI-supplied credentials win; with none set this is the ambient chain.
+        return boto3.client("s3", **credentials.aws_client_kwargs())
 
     def _head(self, bucket: str, key: str) -> Tuple[dict, bool]:
         """Return (head, anonymous) trying signed first, then unsigned."""

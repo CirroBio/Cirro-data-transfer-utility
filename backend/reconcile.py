@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from backend import cache, db
+from backend import db
 from backend.cirro_gateway import CirroGateway
 from backend.models import Status
 from backend.schema import folder_in_project
@@ -96,20 +96,15 @@ def reconcile_all(gateway: CirroGateway, default_project: Optional[str] = None) 
 
         folder = folder_in_project(spec["study"], spec["folder_path"])
         project_id = gateway.resolve_project_id(project_ref)
-        cached = cache.get(project_id, key)
-        if cached is None:
-            dataset = gateway.find_dataset(project_id, name, folder)
-            if dataset is None:
-                cache.put(project_id, key, None, [])
-                cirro_files: List[Dict] = []
-                dataset_id = None
-            else:
-                cirro_files = gateway.list_dataset_files(dataset)
-                dataset_id = dataset.id
-                cache.put(project_id, key, dataset_id, cirro_files)
+        # Always ask Cirro: a reconcile exists to report the tenant's current
+        # state, and datasets can be created or changed outside this app.
+        dataset = gateway.find_dataset(project_id, name, folder)
+        if dataset is None:
+            cirro_files: List[Dict] = []
+            dataset_id = None
         else:
-            cirro_files = cached["files"]
-            dataset_id = cached["dataset_id"]
+            cirro_files = gateway.list_dataset_files(dataset)
+            dataset_id = dataset.id
 
         if not cirro_files and dataset_id is None:
             status = Status.PENDING

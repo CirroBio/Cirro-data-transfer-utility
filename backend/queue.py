@@ -25,6 +25,9 @@ class TransferQueue:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._threads: List[threading.Thread] = []
+        # Keys whose in-flight transfer has been asked to stop.
+        self._cancelled: set = set()
+        self._cancel_lock = threading.Lock()
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -76,6 +79,56 @@ class TransferQueue:
         broker.publish({"type": "queue", "action": "enqueued", "keys": queued})
         return queued
 
+    def cancel(self, keys: List[str]) -> Dict[str, List[str]]:
+        """Stop transfers for ``keys``.
+
+        A queued dataset is dropped before it ever starts; a running one is
+        flagged and stops at the next file boundary (an individual file's
+        download/upload is not interrupted mid-flight). Returns the keys that
+        were dropped from the queue and those left to stop themselves.
+        """
+        dropped: List[str] = []
+        stopping: List[str] = []
+        with db.write() as conn:
+            for key in keys:
+                row = conn.execute(
+                    "SELECT state FROM queue WHERE dataset_key=?", (key,)
+                ).fetchone()
+                if row is None:
+                    continue
+                if row["state"] == "RUNNING":
+                    stopping.append(key)
+                    continue
+                conn.execute("DELETE FROM queue WHERE dataset_key=?", (key,))
+                conn.execute(
+                    "UPDATE datasets SET status=?, error=NULL, updated_at=datetime('now') "
+                    "WHERE key=?",
+                    (Status.CANCELLED, key),
+                )
+                dropped.append(key)
+        # Flag runners only after the queue rows are settled, so a worker that
+        # picks one up in between still sees the flag.
+        with self._cancel_lock:
+            self._cancelled.update(stopping)
+        for key in dropped:
+            broker.publish({"type": "dataset", "key": key, "name": key.rsplit("/", 1)[-1],
+                            "status": Status.CANCELLED})
+        broker.publish({"type": "queue", "action": "cancelled", "keys": dropped + stopping})
+        return {"dropped": dropped, "stopping": stopping}
+
+    def is_cancelled(self, key: str) -> bool:
+        with self._cancel_lock:
+            return key in self._cancelled
+
+    def _set_cancelled(self, key: str) -> None:
+        with db.write() as conn:
+            conn.execute(
+                "UPDATE datasets SET status=?, error=NULL, updated_at=datetime('now') WHERE key=?",
+                (Status.CANCELLED, key),
+            )
+        broker.publish({"type": "dataset", "key": key, "name": key.rsplit("/", 1)[-1],
+                        "status": Status.CANCELLED})
+
     def snapshot(self) -> List[Dict]:
         with db.read() as conn:
             rows = conn.execute(
@@ -99,6 +152,8 @@ class TransferQueue:
     def _finish(self, key: str) -> None:
         with db.write() as conn:
             conn.execute("DELETE FROM queue WHERE dataset_key=?", (key,))
+        with self._cancel_lock:
+            self._cancelled.discard(key)
 
     def _loop(self) -> None:
         while not self._stop.is_set():
@@ -107,13 +162,22 @@ class TransferQueue:
                 self._wake.wait(timeout=2.0)
                 self._wake.clear()
                 continue
+            if self.is_cancelled(key):
+                # Cancelled between being queued and claimed — never start it.
+                self._set_cancelled(key)
+                self._finish(key)
+                continue
             if not self.gateway.connected:
                 # Can't transfer without Cirro; put it back and wait.
                 with db.write() as conn:
                     conn.execute("UPDATE queue SET state='QUEUED' WHERE dataset_key=?", (key,))
+                self._wake.clear()
                 self._wake.wait(timeout=2.0)
                 continue
             try:
-                transfer_dataset(self.gateway, key, self.default_project, broker.publish)
+                transfer_dataset(
+                    self.gateway, key, self.default_project, broker.publish,
+                    is_cancelled=lambda k=key: self.is_cancelled(k),
+                )
             finally:
                 self._finish(key)

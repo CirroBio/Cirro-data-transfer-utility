@@ -8,6 +8,7 @@ from backend.models import FileSpec, VerifyTier
 from backend.sources.base import ChecksumMismatch, Downloader, SizeMismatch
 from backend.sources.checksum import Checksum, MultiHasher, StatResult
 from backend.sources.registry import get_downloader
+from backend.sources.s3 import _checksum_from_head
 from backend.sources.synapse import SynapseDownloader
 
 
@@ -89,6 +90,31 @@ def test_registry_scheme_dispatch():
     assert get_downloader("https://h/p").__class__.__name__ == "HttpsDownloader"
     with pytest.raises(ValueError):
         get_downloader("weird://x")
+
+
+def test_kms_etag_is_not_taken_as_md5():
+    etag = '"54c239bf47cdf5a9aa5227c42137f861"'
+    assert _checksum_from_head({"ETag": etag}).value == etag.strip('"')
+    assert _checksum_from_head(
+        {"ETag": etag, "ServerSideEncryption": "aws:kms"}
+    ) is None
+    assert _checksum_from_head(
+        {"ETag": etag, "SSECustomerAlgorithm": "AES256"}
+    ) is None
+    # SSE-S3 leaves the ETag as the plaintext MD5.
+    assert _checksum_from_head(
+        {"ETag": etag, "ServerSideEncryption": "AES256"}
+    ).value == etag.strip('"')
+
+
+def test_stored_checksum_wins_over_kms_etag():
+    digest = base64.b64encode(hashlib.sha256(b"x").digest()).decode()
+    ck = _checksum_from_head({
+        "ETag": '"54c239bf47cdf5a9aa5227c42137f861"',
+        "ServerSideEncryption": "aws:kms",
+        "ChecksumSHA256": digest,
+    })
+    assert ck.algo == "sha256"
 
 
 def test_synapse_stub_raises_clearly(tmp_path):
