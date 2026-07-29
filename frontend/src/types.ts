@@ -11,6 +11,21 @@ export interface Project {
   name: string;
 }
 
+/** Presence and a non-reversible hint per provider — never the secrets. */
+export interface CredentialsStatus {
+  aws: {
+    configured: boolean;
+    hint: string | null;
+    temporary: boolean;
+    region: string | null;
+  };
+  gcp: {
+    configured: boolean;
+    hint: string | null;
+    project: string | null;
+  };
+}
+
 export interface FileRow {
   relative_path: string;
   source_uri: string;
@@ -48,6 +63,30 @@ export interface ExcludedDataset {
   excluded_at: string | null;
 }
 
+/** Live download progress for one dataset: files completed, plus the file in
+ *  flight and its byte counts. */
+export interface DownloadProgress {
+  done?: number;
+  total?: number | null;
+  file?: string;
+  bytes?: number;
+  totalBytes?: number | null;
+}
+
+/** Live upload progress for one dataset, counted in files (not bytes). */
+export interface UploadProgress {
+  done?: number;
+  total?: number | null;
+  file?: string;
+  resume?: boolean;
+}
+
+/** Both phases tracked separately so each gets its own progress bar. */
+export interface DatasetProgress {
+  download?: DownloadProgress;
+  upload?: UploadProgress;
+}
+
 export interface QueueItem {
   dataset_key: string;
   name: string | null;
@@ -58,5 +97,7 @@ export interface QueueItem {
 export type SseEvent =
   | { type: "dataset"; key: string; name: string; status: string; error?: string; dataset_id?: string; checksum_method?: string }
   | { type: "progress"; key: string; name: string; phase: "download" | "upload"; file?: string; bytes?: number; total?: number | null; done?: number; resume?: boolean }
+  // One per file as it finishes; carries the running file count for that phase.
+  | { type: "file"; key: string; name: string; phase: "download" | "upload"; file: string; done: number; total: number }
   | { type: "queue"; action: string; keys: string[] }
   | { type: "warning"; key: string; name: string; message: string };

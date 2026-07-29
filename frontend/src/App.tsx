@@ -1,32 +1,35 @@
+import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import SettingsIcon from "@mui/icons-material/Settings";
+import {
+  Alert,
+  AppBar,
+  Box,
+  Button,
+  Container,
+  IconButton,
+  Stack,
+  Toolbar,
+  Tooltip,
+  Typography,
+} from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, subscribeEvents } from "./api";
 import AuthPanel from "./components/AuthPanel";
 import ControlBar from "./components/ControlBar";
+import CredentialsPanel from "./components/CredentialsPanel";
 import DatasetTable from "./components/DatasetTable";
 import ExcludedPanel from "./components/ExcludedPanel";
 import QueuePanel from "./components/QueuePanel";
-import type { AuthStatus, Dataset, ExcludedDataset, Project, QueueItem, SseEvent } from "./types";
-
-function humanBytes(n: number): string {
-  const u = ["B", "KB", "MB", "GB", "TB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < u.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(i > 0 ? 1 : 0)} ${u[i]}`;
-}
-
-function progressText(e: SseEvent): string | null {
-  if (e.type !== "progress") return null;
-  if (e.phase === "download") {
-    const of = e.total ? ` / ${humanBytes(e.total)}` : "";
-    return `⬇ ${e.file} — ${humanBytes(e.bytes ?? 0)}${of}`;
-  }
-  if (e.resume) return "⬆ resuming upload…";
-  return `⬆ uploading ${e.done ?? 0}/${e.total ?? 0}${e.file ? ` — ${e.file}` : ""}`;
-}
+import { AUTH_STATUS_COLOR, COLOR_LOGO_LIGHT, COLOR_MUTED, FONT_MONO } from "./theme";
+import type {
+  AuthStatus,
+  CredentialsStatus,
+  Dataset,
+  DatasetProgress,
+  ExcludedDataset,
+  Project,
+  QueueItem,
+} from "./types";
 
 export default function App() {
   const [auth, setAuth] = useState<AuthStatus>({
@@ -41,18 +44,24 @@ export default function App() {
   const [excluded, setExcluded] = useState<ExcludedDataset[]>([]);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [defaultProject, setDefaultProject] = useState("");
-  const [progress, setProgress] = useState<Record<string, string>>({});
+  const [progress, setProgress] = useState<Record<string, DatasetProgress>>({});
   const [checksumMethod, setChecksumMethod] = useState<string | null>(null);
+  const [creds, setCreds] = useState<CredentialsStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
 
   const connected = auth.status === "connected";
   const refreshTimer = useRef<number | null>(null);
 
-  const refreshData = useCallback(() => {
-    api.datasets().then(setDatasets).catch(() => {});
-    api.excluded().then(setExcluded).catch(() => {});
-    api.queue().then(setQueue).catch(() => {});
+  const reportError = useCallback((e: unknown) => {
+    setError(e instanceof Error ? e.message : String(e));
   }, []);
+
+  const refreshData = useCallback(() => {
+    api.datasets().then(setDatasets).catch(reportError);
+    api.excluded().then(setExcluded).catch(reportError);
+    api.queue().then(setQueue).catch(reportError);
+  }, [reportError]);
 
   // Debounce bursts of SSE-triggered refreshes.
   const scheduleRefresh = useCallback(() => {
@@ -78,25 +87,53 @@ export default function App() {
   }, [auth.status]);
 
   // Load persisted datasets/queue on mount (they survive restarts and don't
-  // require a Cirro connection to display).
+  // require a Cirro connection to display). Credential *presence* is read the
+  // same way — the secrets themselves have no read path.
   useEffect(() => {
     refreshData();
-  }, [refreshData]);
+    api.credentials().then(setCreds).catch(reportError);
+  }, [refreshData, reportError]);
 
   // On connect, load projects (which do require auth).
   useEffect(() => {
     if (connected) {
-      api.projects().then(setProjects).catch(() => {});
+      api.projects().then(setProjects).catch(reportError);
       refreshData();
     }
-  }, [connected, refreshData]);
+  }, [connected, refreshData, reportError]);
 
   // Subscribe to the server event stream once.
   useEffect(() => {
     return subscribeEvents((e) => {
-      const text = progressText(e);
-      if (text && "key" in e) {
-        setProgress((p) => ({ ...p, [e.key]: text }));
+      if (e.type === "progress") {
+        // Keep the two phases separate: each drives its own bar, and their
+        // `total` fields are in different units (bytes vs files).
+        setProgress((p) => ({
+          ...p,
+          [e.key]: {
+            ...p[e.key],
+            ...(e.phase === "download"
+              ? {
+                  download: {
+                    ...p[e.key]?.download,
+                    file: e.file,
+                    bytes: e.bytes,
+                    totalBytes: e.total,
+                  },
+                }
+              : { upload: { done: e.done, total: e.total, file: e.file, resume: e.resume } }),
+          },
+        }));
+      }
+      // A file finished: advance that phase's file count without refetching.
+      if (e.type === "file") {
+        setProgress((p) => ({
+          ...p,
+          [e.key]: {
+            ...p[e.key],
+            [e.phase]: { ...p[e.key]?.[e.phase], done: e.done, total: e.total },
+          },
+        }));
       }
       if (e.type === "dataset") {
         if (e.checksum_method) setChecksumMethod(e.checksum_method);
@@ -115,52 +152,115 @@ export default function App() {
 
   return (
     <>
-      <header>
-        <div className="logo" aria-hidden>⇪</div>
-        <div>
-          <h1>Cirro Data Transfer Utility</h1>
-          <div className="subtitle">bulk-load external files into Cirro as datasets</div>
-        </div>
-      </header>
+      <AppBar position="sticky">
+        <Toolbar variant="dense" sx={{ minHeight: 56 }}>
+          <Stack direction="row" alignItems="baseline" spacing={1.5}>
+            <Typography
+              sx={{
+                fontFamily: FONT_MONO,
+                fontSize: 15,
+                letterSpacing: "0.04em",
+                color: COLOR_LOGO_LIGHT,
+              }}
+            >
+              cirro
+            </Typography>
+            <Typography sx={{ fontSize: 14, color: "#fff" }}>Data Transfer Utility</Typography>
+          </Stack>
+          <Box sx={{ flex: 1 }} />
+          <Typography
+            sx={{
+              fontSize: 12,
+              color: "rgba(255,255,255,0.7)",
+              display: { xs: "none", md: "block" },
+            }}
+          >
+            bulk-load external files into Cirro as datasets
+          </Typography>
+          {/* Connection state stays visible from every page — settings is where
+              you change it, not where you have to go to see it. */}
+          <Stack direction="row" alignItems="center" spacing={0.75} sx={{ ml: 3, mr: 1 }}>
+            <Box
+              sx={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                bgcolor: AUTH_STATUS_COLOR[auth.status] ?? COLOR_MUTED,
+              }}
+            />
+            <Typography sx={{ fontSize: 12, color: "rgba(255,255,255,0.85)" }}>
+              {connected ? auth.user ?? "connected" : auth.status}
+            </Typography>
+          </Stack>
+          <Tooltip title={showSettings ? "Back to transfers" : "Settings"}>
+            <IconButton
+              aria-label={showSettings ? "Back to transfers" : "Settings"}
+              aria-pressed={showSettings}
+              sx={{ color: "#fff" }}
+              onClick={() => setShowSettings((v) => !v)}
+            >
+              {showSettings ? <ArrowBackIcon /> : <SettingsIcon />}
+            </IconButton>
+          </Tooltip>
+        </Toolbar>
+      </AppBar>
 
-      <div className="container">
+      <Container maxWidth="xl" sx={{ py: 3 }}>
         {error && (
-          <div className="stack" style={{ paddingBottom: 0 }}>
-            <div className="alert">
-              <span>{error}</span>
-              <div className="spacer" />
-              <button className="secondary" onClick={() => setError(null)}>Dismiss</button>
-            </div>
-          </div>
+          <Alert
+            severity="error"
+            sx={{ mb: 2.5 }}
+            action={
+              <Button color="inherit" size="small" onClick={() => setError(null)}>
+                Dismiss
+              </Button>
+            }
+          >
+            {error}
+          </Alert>
         )}
 
-        <div className="stack">
-          <AuthPanel auth={auth} onLogin={() => api.login().then(setAuth).catch((e) => setError(String(e)))} />
-        </div>
-
-        <div className="layout">
-          <div>
+        {showSettings ? (
+          <>
+            <AuthPanel
+              auth={auth}
+              onLogin={() => api.login().then(setAuth).catch(reportError)}
+              onAuth={setAuth}
+              onError={setError}
+            />
+            <CredentialsPanel status={creds} onChanged={setCreds} onError={setError} />
+            <Button
+              startIcon={<ArrowBackIcon />}
+              color="secondary"
+              onClick={() => setShowSettings(false)}
+            >
+              Back to transfers
+            </Button>
+          </>
+        ) : (
+          <>
             <ControlBar
               connected={connected}
               projects={projects}
               defaultProject={defaultProject}
+              datasetCount={datasets.length}
               onDefaultProject={setDefaultProject}
               onChanged={refreshData}
               onError={setError}
             />
-            <DatasetTable
+            <DatasetTable datasets={datasets} connected={connected} onChanged={refreshData} />
+            <ExcludedPanel excluded={excluded} />
+            <QueuePanel
+              queue={queue}
               datasets={datasets}
               progress={progress}
-              connected={connected}
+              checksumMethod={checksumMethod}
               onChanged={refreshData}
+              onError={setError}
             />
-            <ExcludedPanel excluded={excluded} />
-          </div>
-          <div>
-            <QueuePanel queue={queue} progress={progress} checksumMethod={checksumMethod} />
-          </div>
-        </div>
-      </div>
+          </>
+        )}
+      </Container>
     </>
   );
 }
