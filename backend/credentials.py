@@ -21,9 +21,13 @@ Cirro's own auth is NOT here — that stays with the SDK's device-code login.
 """
 from __future__ import annotations
 
-import json
 import threading
+import time
 from typing import Dict, Optional
+
+# `gcloud auth print-access-token` mints a ~1 hour token. The exact lifetime is
+# not in the token, so this is only used to tell the operator how stale theirs is.
+GCP_TOKEN_NOMINAL_LIFETIME_SECONDS = 3600
 
 
 class CredentialError(ValueError):
@@ -34,7 +38,8 @@ class _Store:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._aws: Optional[Dict[str, str]] = None
-        self._gcp_info: Optional[Dict] = None
+        self._gcp_token: Optional[str] = None
+        self._gcp_token_set_at: Optional[float] = None
 
     # ---- AWS ------------------------------------------------------------
 
@@ -65,34 +70,39 @@ class _Store:
 
     # ---- GCP ------------------------------------------------------------
 
-    def set_gcp_service_account(self, service_account_json: str) -> None:
-        try:
-            info = json.loads(service_account_json)
-        except json.JSONDecodeError as exc:
-            raise CredentialError(f"Not valid JSON: {exc.msg}") from None
-        if not isinstance(info, dict):
-            raise CredentialError("Expected a service account JSON object")
-        missing = [f for f in ("client_email", "private_key", "token_uri") if not info.get(f)]
-        if missing:
+    def set_gcp_access_token(self, access_token: str) -> None:
+        """Accept an OAuth access token, as printed by
+        ``gcloud auth print-access-token``.
+
+        Deliberately not a service account key: a bearer token needs no key file
+        on the server, and it expires on its own, so a paste that is forgotten
+        about stops working within the hour.
+        """
+        token = (access_token or "").strip()
+        if not token:
+            raise CredentialError("Access token is required")
+        if any(c.isspace() for c in token):
             raise CredentialError(
-                f"Not a service account key — missing {', '.join(missing)}"
+                "Access token contains whitespace — paste only the token, with "
+                "no surrounding output"
             )
         with self._lock:
-            self._gcp_info = info
+            self._gcp_token = token
+            self._gcp_token_set_at = time.time()
 
     def gcp_credentials(self):
-        """A google-auth credentials object, or None to use the ambient ADC."""
+        """A google-auth credentials object, or None to use the ambient ADC.
+
+        The token cannot be refreshed — there is no refresh token or key behind
+        it — so once it expires the operator has to paste a new one.
+        """
         with self._lock:
-            info = dict(self._gcp_info) if self._gcp_info else None
-        if info is None:
+            token = self._gcp_token
+        if token is None:
             return None
-        from google.oauth2 import service_account
+        from google.oauth2.credentials import Credentials
 
-        return service_account.Credentials.from_service_account_info(info)
-
-    def gcp_project(self) -> Optional[str]:
-        with self._lock:
-            return (self._gcp_info or {}).get("project_id")
+        return Credentials(token=token)
 
     # ---- lifecycle ------------------------------------------------------
 
@@ -101,14 +111,21 @@ class _Store:
             if provider == "aws":
                 self._aws = None
             elif provider == "gcp":
-                self._gcp_info = None
+                self._gcp_token = None
+                self._gcp_token_set_at = None
             else:
                 raise CredentialError(f"Unknown provider '{provider}'")
 
     def status(self) -> Dict[str, Dict]:
-        """Non-secret summary safe to return over HTTP."""
+        """Non-secret summary safe to return over HTTP.
+
+        Nothing derived from the GCP token is reported — not even a prefix, since
+        a bearer token is usable in whole or in part by an attacker who has the
+        rest. Its age stands in for identity.
+        """
         with self._lock:
-            aws, gcp = self._aws, self._gcp_info
+            aws = self._aws
+            token_set_at = self._gcp_token_set_at
         return {
             "aws": {
                 "configured": aws is not None,
@@ -118,9 +135,11 @@ class _Store:
                 "region": aws.get("region_name") if aws else None,
             },
             "gcp": {
-                "configured": gcp is not None,
-                "hint": gcp.get("client_email") if gcp else None,
-                "project": gcp.get("project_id") if gcp else None,
+                "configured": token_set_at is not None,
+                "age_seconds": (
+                    int(time.time() - token_set_at) if token_set_at is not None else None
+                ),
+                "nominal_lifetime_seconds": GCP_TOKEN_NOMINAL_LIFETIME_SECONDS,
             },
         }
 

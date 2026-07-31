@@ -141,7 +141,19 @@ Credentials* panel accepts them at runtime instead:
 | Provider | Fields | Applied to |
 | --- | --- | --- |
 | AWS | access key id, secret, optional session token, optional region | `s3://` |
-| Google Cloud | service account key (JSON) | `gs://` |
+| Google Cloud | OAuth access token from `gcloud auth print-access-token` | `gs://` |
+
+For Google Cloud, generate the token wherever you have `gcloud` and paste it in:
+
+```bash
+gcloud auth print-access-token
+```
+
+That is a bearer token with no refresh material behind it, so it expires roughly
+an hour after issue and cannot be renewed server-side — the panel shows how long
+ago it was pasted and flags it once it is past that. When `gs://` downloads start
+failing, paste a fresh one. This is deliberate over a service account key: no key
+file ever lands on the server, and a forgotten paste stops working on its own.
 
 The *Cirro Connection* panel likewise takes the tenant host (`Use tenant`), so
 `CIRRO_BASE_URL` need not be baked into the environment. Changing tenants

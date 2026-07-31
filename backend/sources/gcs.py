@@ -34,12 +34,12 @@ class GcsDownloader(Downloader):
         from google.auth.exceptions import DefaultCredentialsError
         from google.cloud import storage
 
-        # UI-supplied service account wins; otherwise ADC, then anonymous.
+        # UI-supplied token wins; otherwise ADC, then anonymous. project=None is
+        # supported explicitly by the client and is right here: a bearer token
+        # carries no project, and object reads don't need one.
         supplied = credentials.gcp_credentials()
         if supplied is not None:
-            client = storage.Client(
-                credentials=supplied, project=credentials.gcp_project()
-            )
+            client = storage.Client(credentials=supplied, project=None)
         else:
             try:
                 client = storage.Client()

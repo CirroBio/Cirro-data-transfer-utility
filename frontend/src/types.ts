@@ -21,8 +21,9 @@ export interface CredentialsStatus {
   };
   gcp: {
     configured: boolean;
-    hint: string | null;
-    project: string | null;
+    /** Seconds since the access token was pasted; they expire in about an hour. */
+    age_seconds: number | null;
+    nominal_lifetime_seconds: number;
   };
 }
 

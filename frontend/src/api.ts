@@ -47,11 +47,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(json<CredentialsStatus>),
-  setGcpCredentials: (serviceAccountJson: string) =>
+  setGcpCredentials: (accessToken: string) =>
     fetch("/credentials/gcp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ service_account_json: serviceAccountJson }),
+      body: JSON.stringify({ access_token: accessToken }),
     }).then(json<CredentialsStatus>),
   clearCredentials: (provider: "aws" | "gcp") =>
     fetch(`/credentials/${provider}`, { method: "DELETE" }).then(json<CredentialsStatus>),
