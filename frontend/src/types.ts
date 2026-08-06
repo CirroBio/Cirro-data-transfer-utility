@@ -19,12 +19,6 @@ export interface CredentialsStatus {
     temporary: boolean;
     region: string | null;
   };
-  gcp: {
-    configured: boolean;
-    /** Seconds since the access token was pasted; they expire in about an hour. */
-    age_seconds: number | null;
-    nominal_lifetime_seconds: number;
-  };
 }
 
 export interface FileRow {

@@ -79,16 +79,6 @@ def set_aws_credentials(body: dict = Body(default={})) -> dict:
     return credentials.status()
 
 
-@app.post("/credentials/gcp")
-def set_gcp_credentials(body: dict = Body(default={})) -> dict:
-    """Accept an OAuth access token from `gcloud auth print-access-token`."""
-    try:
-        credentials.set_gcp_access_token(body.get("access_token", ""))
-    except CredentialError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return credentials.status()
-
-
 @app.delete("/credentials/{provider}")
 def clear_credentials(provider: str) -> dict:
     try:

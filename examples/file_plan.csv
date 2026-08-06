@@ -1,7 +1,7 @@
 target_dataset_name,cirro_folder_path,source_dataset_id,source_subpath,target_relative_path,source_pathname,source_location,size_bytes,hash
 WGS Alignments,pici0001,pici0001/wgs-align,,sample1.bam,sample1.bam,gs://example-bucket/pici0001/a1b2c3.bam,1024,eY3ptUR49/0i0fMjFBAaBQ==
 WGS Alignments,pici0001,pici0001/wgs-align,,sample2.bam,sample2.bam,gs://example-bucket/pici0001/d4e5f6.bam,1024,F4Hd88yv0rGE+P73foX21A==
-WGS Alignments,pici0001,pici0001/wgs-align-b2,,sample3.bam,sample3.bam,gs://example-bucket/pici0001/b2/aa11bb.bam,512,bYeYyITBbkrny3ebaAfyzA==
-Flow Panel A,pici0001,pici0001/flow-a,,controls/ctrl_01.fcs,ctrl_01.fcs,gs://example-bucket/pici0001/flow/ctrl01.fcs,150,3b5d5c3712955042212316173ccf37be
-Flow Panel A,pici0001,pici0001/flow-a,,controls/ctrl_02.fcs,ctrl_02.fcs,gs://example-bucket/pici0001/flow/ctrl02.fcs,150,
-Manifest,pici0002,pici0002/manifest,,manifest.tsv,manifest.tsv,gs://example-bucket/pici0002/manifest.tsv,64,c9167e54439c425b9ebd5bc462e355b0
+WGS Alignments,pici0001/Batch2,pici0001/wgs-align-b2,,sample3.bam,sample3.bam,gs://example-bucket/pici0001/b2/aa11bb.bam,512,bYeYyITBbkrny3ebaAfyzA==
+Flow Panel A,pici0001/Cytometry,pici0001/flow-a,,controls/ctrl_01.fcs,ctrl_01.fcs,gs://example-bucket/pici0001/flow/ctrl01.fcs,150,O11cNxKVUEIhIxYXPM83vg==
+Flow Panel A,pici0001/Cytometry,pici0001/flow-a,,controls/ctrl_02.fcs,ctrl_02.fcs,gs://example-bucket/pici0001/flow/ctrl02.fcs,150,
+Manifest,pici0002,pici0002/manifest,,manifest.tsv,manifest.tsv,gs://example-bucket/pici0002/manifest.tsv,64,yRZ+VEOcQluevVvEYuNVsA==

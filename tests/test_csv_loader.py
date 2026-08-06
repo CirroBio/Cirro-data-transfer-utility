@@ -1,7 +1,12 @@
+import base64
+from pathlib import Path
+
 import pytest
 
 from backend import csv_loader, db
 from backend.schema import dataset_key
+
+EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
 # Two datasets share the name 'd1' but sit in different folders of one study —
 # the (name, folder) pair is what makes them distinct. One excluded row.
@@ -104,3 +109,36 @@ def test_persist_upserts_preserves_done_and_records_excluded():
         assert nfiles == 3
         nex = conn.execute("SELECT COUNT(*) n FROM excluded_datasets").fetchone()["n"]
         assert nex == 1
+
+
+def _example_plan():
+    return csv_loader.load(
+        (EXAMPLES / "dataset_plan.csv").read_text(),
+        (EXAMPLES / "file_plan.csv").read_text(),
+    )
+
+
+def test_example_plan_tables_agree_with_each_other():
+    # examples/ is the documented reference input, so the two tables have to
+    # join. load() raises on a file row that matches no dataset, an included
+    # dataset with no files, or an n_files mismatch; total_size_bytes is the one
+    # cross-check it does not make, so it is asserted here.
+    included, excluded = _example_plan()
+    assert {s.key for s in included} == {
+        dataset_key("WGS Alignments", "pici0001"),
+        dataset_key("WGS Alignments", "pici0001/Batch2"),
+        dataset_key("Flow Panel A", "pici0001/Cytometry"),
+        dataset_key("Manifest", "pici0002"),
+    }
+    assert len(excluded) == 1
+    for spec in included:
+        assert spec.planned_bytes == sum(f.expected_size for f in spec.files)
+
+
+def test_example_hashes_are_base64_md5():
+    # The plan's `hash` column is base64, not hex: a hex digest here would be
+    # accepted by the loader and then silently fail every comparison.
+    for spec in _example_plan()[0]:
+        for f in spec.files:
+            if f.expected_checksum:
+                assert len(base64.b64decode(f.expected_checksum, validate=True)) == 16

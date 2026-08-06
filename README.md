@@ -127,6 +127,9 @@ resolves its own credentials; the app never sees them:
 | `https://` | none (plain GET) | the URL itself — public or presigned |
 | `ftp://`, `sftp://` | `user:pass` from the URI | embedded in `source_location` |
 
+A `gs://` source the server has no credentials for can be presigned into an
+`https://` URL ahead of time — see [Presigned `gs://` URLs](#presigned-gs-urls).
+
 The transfer worker is a background thread of the server process, so **whatever
 environment you launch `uvicorn` from is what every transfer uses**. Set source
 credentials in that shell (or in `.env`, sourced as shown under *Run*), then
@@ -141,19 +144,10 @@ Credentials* panel accepts them at runtime instead:
 | Provider | Fields | Applied to |
 | --- | --- | --- |
 | AWS | access key id, secret, optional session token, optional region | `s3://` |
-| Google Cloud | OAuth access token from `gcloud auth print-access-token` | `gs://` |
 
-For Google Cloud, generate the token wherever you have `gcloud` and paste it in:
-
-```bash
-gcloud auth print-access-token
-```
-
-That is a bearer token with no refresh material behind it, so it expires roughly
-an hour after issue and cannot be renewed server-side — the panel shows how long
-ago it was pasted and flags it once it is past that. When `gs://` downloads start
-failing, paste a fresh one. This is deliberate over a service account key: no key
-file ever lands on the server, and a forgotten paste stops working on its own.
+Google Cloud is deliberately not in that list: no key file or bearer token is
+accepted through the app. `gs://` sources are read with the server's own ADC, or
+presigned into `https://` URLs beforehand — see below.
 
 The *Cirro Connection* panel likewise takes the tenant host (`Use tenant`), so
 `CIRRO_BASE_URL` need not be baked into the environment. Changing tenants
@@ -167,8 +161,8 @@ What this does and does not guarantee:
   messages, or SSE events. A restart clears them — expect to re-enter after any
   reload, including `--reload` picking up a code change.
 - **No read path.** `GET /credentials` returns presence plus a non-reversible
-  hint (an access key id's last 4, a service account's `client_email`). The
-  secrets cannot be read back out of the API.
+  hint (an access key id's last 4). The secrets cannot be read back out of the
+  API.
 - **Passed explicitly, not exported.** Values go to each `boto3`/`google-cloud`
   client call rather than into `os.environ`, so they cannot leak into
   subprocesses or race across worker threads.
@@ -210,6 +204,38 @@ Prefer the native credential stores (`gcloud` ADC, `~/.aws`) over raw keys in
 `.env`; short-lived STS values in `.env` are an acceptable dev exception since
 they expire on their own. Note that `ftp://`/`sftp://` carry the password in
 `source_location` — treat any plan CSV using them as a secret.
+
+### Presigned `gs://` URLs
+
+When the server has no Google credentials at all — the usual case for a
+browser-only deployment — presign the plan instead of authenticating the app.
+`scripts/gcs_presign.py` rewrites every `gs://` `source_location` in a
+`file_plan.csv` into a signed `https://` URL that carries its own read
+authorization; the rewritten plan loads into the app as-is and downloads through
+the credential-free `https://` path.
+
+```bash
+gcloud auth application-default login
+python scripts/gcs_presign.py testdata/file_plan.csv \
+    -o testdata/file_plan_signed.csv \
+    --impersonate-service-account transfer@PROJECT.iam.gserviceaccount.com \
+    --expiration 30d --check
+```
+
+- Signing goes through IAM `signBlob` as the impersonated account, so no key
+  file is needed anywhere: grant your own identity
+  `roles/iam.serviceAccountTokenCreator` on that account, and the account read
+  access to the data (`roles/storage.objectViewer`). Drop
+  `--impersonate-service-account` only when ADC is itself a service account key.
+  Each signature costs one IAM call, so raise `--workers` for a large plan.
+- V2 signatures, so `--expiration` is not capped at the seven days V4 allows
+  (default 30 days).
+- `--check` fetches one byte through the first URL and aborts without writing if
+  GCS refuses it — cheap insurance against emitting thousands of URLs that 403.
+- The input can also be a bare list of `gs://` URIs, one per line (e.g. a
+  `gcloud storage ls -r` dump); the output is then `gs_uri,source_location`.
+- Every row of the output grants read access to that object until it expires.
+  The file is written `0600` — treat it as a secret and keep it out of git.
 
 ## Usage
 

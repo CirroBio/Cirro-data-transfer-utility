@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
-from backend.credentials import credentials
 from backend.sources.base import Downloader, ProgressCb
 from backend.sources.checksum import Checksum, MultiHasher, StatResult
 
@@ -34,17 +33,13 @@ class GcsDownloader(Downloader):
         from google.auth.exceptions import DefaultCredentialsError
         from google.cloud import storage
 
-        # UI-supplied token wins; otherwise ADC, then anonymous. project=None is
-        # supported explicitly by the client and is right here: a bearer token
-        # carries no project, and object reads don't need one.
-        supplied = credentials.gcp_credentials()
-        if supplied is not None:
-            client = storage.Client(credentials=supplied, project=None)
-        else:
-            try:
-                client = storage.Client()
-            except (DefaultCredentialsError, EnvironmentError):
-                client = storage.Client.create_anonymous_client()
+        # Ambient ADC, then anonymous for public objects. Sources that need
+        # credentials the server doesn't have should be presigned into https://
+        # URLs first (scripts/gcs_presign.py).
+        try:
+            client = storage.Client()
+        except (DefaultCredentialsError, EnvironmentError):
+            client = storage.Client.create_anonymous_client()
         return client.bucket(bucket_name)
 
     def _get_blob(self, uri: str):

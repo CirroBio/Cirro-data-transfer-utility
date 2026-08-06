@@ -47,13 +47,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(json<CredentialsStatus>),
-  setGcpCredentials: (accessToken: string) =>
-    fetch("/credentials/gcp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    }).then(json<CredentialsStatus>),
-  clearCredentials: (provider: "aws" | "gcp") =>
+  clearCredentials: (provider: "aws") =>
     fetch(`/credentials/${provider}`, { method: "DELETE" }).then(json<CredentialsStatus>),
   projects: () => fetch("/projects").then(json<Project[]>),
   datasets: () => fetch("/datasets").then(json<Dataset[]>),
