@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import queue as _queue
+import tempfile
 from typing import List, Optional
 
 from fastapi import Body, FastAPI, HTTPException, UploadFile
@@ -25,6 +26,9 @@ transfer_queue = TransferQueue(gateway=gateway, concurrency=config.concurrency)
 
 @app.on_event("startup")
 def _startup() -> None:
+    # Keep library scratch files (SDK downloads, token writes) beside the rest
+    # of the app's state rather than on whatever volume backs /tmp.
+    tempfile.tempdir = str(config.tmp_root)
     db.init_db()
     transfer_queue.start()
 

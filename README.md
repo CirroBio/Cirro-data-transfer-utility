@@ -96,12 +96,46 @@ along with any transfer in flight. A dataset interrupted this way resumes on
 retry (its uploaded files are skipped), but avoid editing backend code during a
 long transfer.
 
+### Docker
+
+The image builds the frontend and serves it from the backend, so it needs no
+setup steps beyond the build:
+
+```bash
+docker build -t cirro-data-transfer .
+```
+
+```bash
+docker run --rm -p 8000:8000 -v cirro-transfer-home:/home/cirro cirro-data-transfer
+```
+
+Everything the app writes goes to `/home/cirro`, so that one mount covers all
+of it: `transfer.db`, the `staging/` downloads (**size the mount for the
+largest dataset in flight** — files are downloaded whole before upload), the
+`tmp/` scratch dir that stands in for `/tmp`, and the cached Cirro login in
+`.cirro/`. A container has no keyring, so the SDK stores that token as a
+plaintext file — treat the volume as a secret, or drop it and log in again
+after each restart.
+
+The image sets `CIRRO_TRANSFER_HOME=/home/cirro`; that one variable moves the
+DB, staging, and scratch dirs together, so a different mount point needs no
+other change (`CIRRO_HOME` moves the login cache alongside it).
+
+Source credentials work as they do outside Docker, minus the ambient stores the
+container cannot see (`~/.aws`, gcloud ADC) unless you mount them: enter AWS
+keys in the *Source Credentials* panel, pass them with `-e`/`--env-file .env`,
+or presign `gs://` sources into `https://` URLs beforehand.
+
+The process runs as UID 1000. With a bind mount instead of a named volume
+(`-v $PWD/data:/home/cirro`), make that directory writable by UID 1000 first —
+a bind mount keeps the host's ownership and masks the image's own `/home/cirro`.
+
 ### Configuration (environment variables)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CIRRO_BASE_URL` | `app.cirro.bio` | Cirro tenant host |
-| `CIRRO_TRANSFER_HOME` | `~/.cirro-transfer` | SQLite DB + staging tempdirs |
+| `CIRRO_TRANSFER_HOME` | `~/.cirro-transfer` | SQLite DB + staging and scratch tempdirs |
 | `CIRRO_TRANSFER_CONCURRENCY` | `1` | Datasets transferred in parallel |
 
 Copy `.env.example` to `.env` for the config above. Cirro credentials never go

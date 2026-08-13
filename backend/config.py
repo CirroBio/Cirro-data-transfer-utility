@@ -42,6 +42,17 @@ class Config:
         return path
 
     @property
+    def tmp_root(self) -> Path:
+        """Scratch space for anything that would otherwise land in ``/tmp``.
+
+        Kept under ``home`` so a deployment only has to size and mount one
+        directory; ``app`` points ``tempfile`` here at startup.
+        """
+        path = self.home / "tmp"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
     def frontend_dist(self) -> Path:
         # backend/config.py -> repo root -> frontend/dist
         return Path(__file__).resolve().parent.parent / "frontend" / "dist"

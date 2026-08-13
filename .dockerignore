@@ -1,0 +1,22 @@
+.git/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+
+# Never bake credentials or local data into an image layer.
+.env
+.cirro-transfer/
+TEMP
+testdata/
+
+tests/
+examples/
+scripts/
+.claude/
+.DS_Store
