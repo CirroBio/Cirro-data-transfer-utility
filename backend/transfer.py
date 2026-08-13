@@ -192,8 +192,18 @@ def transfer_dataset(
 
         # --- VERIFYING (end-to-end checksum confirmation) ------------------
         status(Status.VERIFYING)
+        # Ingest can take a while and each file is then re-hashed locally, so
+        # report a count from the outset — an unmoving phase reads as a hang.
+        emit({"type": "progress", "key": key, "name": name, "phase": "verify",
+              "done": 0, "total": total_files})
         gateway.wait_for_ingest(project_id, dataset_id)
-        size_only = gateway.validate_uploaded_files(project_id, dataset_id, staging, rel_paths)
+        size_only = gateway.validate_uploaded_files(
+            project_id, dataset_id, staging, rel_paths,
+            lambda rel, done: emit({
+                "type": "file", "key": key, "name": name, "phase": "verify",
+                "file": rel, "done": done, "total": total_files,
+            }),
+        )
         if size_only:
             emit({"type": "warning", "key": key, "name": name,
                   "message": f"{len(size_only)} file(s) verified by size only (no remote checksum)"})

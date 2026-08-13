@@ -16,13 +16,9 @@ from __future__ import annotations
 from typing import Dict, List, Optional
 
 from backend import db
-from backend.cirro_gateway import CirroGateway
+from backend.cirro_gateway import CirroGateway, strip_data_prefix
 from backend.models import Status
 from backend.schema import folder_in_project
-
-
-def _strip_data(path: str) -> str:
-    return path[len("data/"):] if path.startswith("data/") else path
 
 
 def _load_specs() -> List[Dict]:
@@ -55,7 +51,7 @@ def _load_specs() -> List[Dict]:
 def _compare(spec_files: List[Dict], cirro_files: List[Dict]) -> bool:
     """True when every spec file is present in Cirro with a matching size
     (size only checked when the spec provides one)."""
-    remote = {_strip_data(f["relative_path"]): f["size_bytes"] for f in cirro_files}
+    remote = {strip_data_prefix(f["relative_path"]): f["size_bytes"] for f in cirro_files}
     spec_paths = {f["relative_path"] for f in spec_files}
     if spec_paths != set(remote):
         return False

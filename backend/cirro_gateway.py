@@ -18,6 +18,10 @@ from backend.config import config
 
 _FOLDER_TAG = "folder://"
 
+# Cirro reports a dataset's files under a `data/` prefix; plan paths don't
+# carry it, so it is stripped before the two are matched up.
+_DATA_PREFIX = "data/"
+
 # Cirro's API gateway throttles per tenant, so a burst from anywhere (this app,
 # the web UI, another client) can 429 any single request. The SDK has no
 # backoff of its own, so retry here rather than failing a whole transfer.
@@ -48,6 +52,11 @@ def _retry_throttled(call: Callable[[], T]) -> T:
 
 class NotConnected(Exception):
     pass
+
+
+def strip_data_prefix(path: str) -> str:
+    """A Cirro file's path as the plan spells it, without the `data/` prefix."""
+    return path[len(_DATA_PREFIX):] if path.startswith(_DATA_PREFIX) else path
 
 
 def _dataset_folder(dataset) -> str:
@@ -308,25 +317,46 @@ class CirroGateway:
         return self._require_client().configuration.checksum_method_display
 
     def validate_uploaded_files(
-        self, project_id: str, dataset_id: str, directory: Path, rel_paths: List[str]
+        self,
+        project_id: str,
+        dataset_id: str,
+        directory: Path,
+        rel_paths: List[str],
+        on_verified: Optional[Callable[[str, int], None]] = None,
     ) -> List[str]:
         """Confirm every finalized Cirro file matches the local staged file by
         checksum. Returns the list of files that could only be size-verified
-        (remote checksum unavailable). Raises ValueError on a real mismatch."""
+        (remote checksum unavailable). Raises ValueError on a real mismatch.
+
+        ``on_verified`` is called with (relative_path, files_done) after each
+        file: this phase costs a remote stat plus a full local re-hash per file,
+        so without progress it reads as a hang on a large dataset.
+        """
         portal = self._require_portal()
         project = portal.get_project_by_id(project_id)
         dataset = project.get_dataset_by_id(dataset_id)
+        # List the dataset once. The SDK's dataset.get_file() re-fetches the
+        # whole manifest on every call, so resolving paths one at a time costs a
+        # full listing per file.
+        remote = {
+            strip_data_prefix(f.relative_path): f
+            for f in _retry_throttled(dataset.list_files)
+        }
         size_only: List[str] = []
-        for rel in rel_paths:
+        for done, rel in enumerate(rel_paths, start=1):
+            cirro_file = remote.get(rel)
+            if cirro_file is None:
+                raise ValueError(f"'{rel}' is missing from Cirro after upload")
             local = directory / rel
-            cirro_file = _retry_throttled(lambda rel=rel: dataset.get_file(rel))
             try:
-                _retry_throttled(lambda: cirro_file.validate(str(local)))
+                _retry_throttled(lambda f=cirro_file: f.validate(str(local)))
             except RuntimeWarning:
                 # Remote checksum unavailable — fall back to a size comparison.
                 if cirro_file.size_bytes != local.stat().st_size:
                     raise ValueError(f"Size mismatch after upload for '{rel}'")
                 size_only.append(rel)
+            if on_verified:
+                on_verified(rel, done)
         return size_only
 
 

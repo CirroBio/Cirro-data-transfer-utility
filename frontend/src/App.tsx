@@ -106,8 +106,8 @@ export default function App() {
   useEffect(() => {
     return subscribeEvents((e) => {
       if (e.type === "progress") {
-        // Keep the two phases separate: each drives its own bar, and their
-        // `total` fields are in different units (bytes vs files).
+        // Keep the phases separate: each drives its own bar, and download's
+        // `total` is in bytes where the others count files.
         setProgress((p) => ({
           ...p,
           [e.key]: {
@@ -121,7 +121,14 @@ export default function App() {
                     totalBytes: e.total,
                   },
                 }
-              : { upload: { done: e.done, total: e.total, file: e.file, resume: e.resume } }),
+              : {
+                  [e.phase]: {
+                    done: e.done,
+                    total: e.total,
+                    file: e.file,
+                    resume: e.resume,
+                  },
+                }),
           },
         }));
       }

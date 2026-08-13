@@ -123,9 +123,13 @@ export default function QueuePanel({
           const downloadTotal = phases.download?.total ?? totalFiles;
           const uploaded = phases.upload?.done ?? 0;
           const uploadTotal = phases.upload?.total ?? totalFiles;
+          const verified = phases.verify?.done ?? 0;
+          const verifyTotal = phases.verify?.total ?? totalFiles;
 
-          const uploading = phases.upload !== undefined;
-          const downloading = phases.download !== undefined && !uploading;
+          // Only the latest phase reached is the active one.
+          const verifying = phases.verify !== undefined;
+          const uploading = phases.upload !== undefined && !verifying;
+          const downloading = phases.download !== undefined && !uploading && !verifying;
 
           return (
             <Box
@@ -180,6 +184,13 @@ export default function QueuePanel({
                       : undefined
                 }
                 active={uploading}
+              />
+              <PhaseBar
+                label="Verify"
+                done={verified}
+                total={verifyTotal}
+                detail={phases.verify?.file ?? (verifying ? "waiting for ingest…" : undefined)}
+                active={verifying}
               />
 
               {!dataset && (
