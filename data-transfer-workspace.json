@@ -1,0 +1,11 @@
+{
+  "name": "Data Transfer Utility",
+  "description": "Bulk-transfer files from external sources into Cirro as complete, immutable datasets",
+  "container_image_uri": "public.ecr.aws/cirrobio/data-transfer:a1fb8af",
+  "local_port": 8000,
+  "cpu": 8,
+  "memory_gi_b": 32,
+  "volume_size_gi_b": 500,
+  "sharing_type": "PRIVATE",
+  "mounted_datasets": []
+}

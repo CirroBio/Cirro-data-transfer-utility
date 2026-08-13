@@ -105,6 +105,25 @@ setup steps beyond the build:
 docker build -t cirro-data-transfer .
 ```
 
+Build for the architecture the deployment runs on, not the one you build on. A
+Cirro workspace is x86_64, so an image built on an Apple Silicon Mac fails at
+startup with `exec format error` — the manifest is arm64 and nothing in the
+workspace reports why. Name the platform explicitly when the two differ:
+
+```bash
+docker buildx build --platform linux/amd64 -t cirro-data-transfer .
+```
+
+To publish a build for a Cirro workspace to run, `scripts/publish_image.sh`
+logs docker into public ECR with your AWS credentials, builds for `linux/amd64`,
+and pushes to `public.ecr.aws/cirrobio/data-transfer` tagged with the current
+commit. It refuses a dirty tree, since that tag would otherwise name a commit
+the image does not contain:
+
+```bash
+bash scripts/publish_image.sh
+```
+
 ```bash
 docker run --rm -p 8000:8000 -v cirro-transfer-home:/home/cirro cirro-data-transfer
 ```

@@ -33,4 +33,9 @@ USER cirro
 VOLUME /home/cirro
 
 EXPOSE 8000
+# Timings match Cirro's own workspace images. Fetching / exercises the static
+# mount as well as the server; python stands in for curl, which the slim base
+# does not carry.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"
 CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
