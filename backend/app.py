@@ -1,5 +1,5 @@
-"""FastAPI application: auth, CSV loading, reconcile, transfer queue, SSE, and
-static serving of the built frontend."""
+"""FastAPI application: auth, CSV loading, reconcile, transfer queue, progress
+events, and static serving of the built frontend."""
 from __future__ import annotations
 
 import asyncio
@@ -250,18 +250,19 @@ def get_queue() -> List[dict]:
     return transfer_queue.snapshot()
 
 
+@app.get("/config")
+def get_config() -> dict:
+    return _config_status()
+
+
 @app.post("/config")
 def set_config(body: dict = Body(default={})) -> dict:
     if "default_project" in body:
         transfer_queue.default_project = body["default_project"] or None
-    return {
-        "default_project": transfer_queue.default_project,
-        "concurrency": transfer_queue.concurrency,
-        "base_url": config.base_url,
-    }
+    return _config_status()
 
 
-# ---- SSE ----------------------------------------------------------------
+# ---- events -------------------------------------------------------------
 
 @app.get("/events")
 async def events() -> StreamingResponse:
@@ -270,19 +271,39 @@ async def events() -> StreamingResponse:
     async def stream():
         try:
             yield "retry: 3000\n\n"
+            # `hello` and `ping` are frames rather than SSE comments so the
+            # client can tell a live stream from one a proxy is buffering: a
+            # comment never reaches `onmessage`.
+            yield f"data: {json.dumps({'type': 'hello', 'seq': broker.seq})}\n\n"
             while True:
                 try:
                     event = await asyncio.to_thread(q.get, True, 15.0)
                     yield f"data: {json.dumps(event)}\n\n"
                 except _queue.Empty:
-                    yield ": keepalive\n\n"
+                    yield f"data: {json.dumps({'type': 'ping'})}\n\n"
         finally:
             broker.unsubscribe(q)
 
     return StreamingResponse(stream(), media_type="text/event-stream")
 
 
+@app.get("/events/poll")
+def poll_events(since: Optional[int] = None) -> dict:
+    """The same events as the stream, over an ordinary short request, for
+    deployments where SSE does not survive the proxy."""
+    return broker.since(since)
+
+
 # ---- helpers & static ---------------------------------------------------
+
+def _config_status() -> dict:
+    return {
+        "default_project": transfer_queue.default_project,
+        "concurrency": transfer_queue.concurrency,
+        "base_url": config.base_url,
+        "events_transport": config.events_transport,
+    }
+
 
 def _require_connected() -> None:
     if not gateway.connected:

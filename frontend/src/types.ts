@@ -84,6 +84,22 @@ export interface DatasetProgress {
   verify?: FileCountProgress;
 }
 
+export interface AppConfig {
+  default_project: string | null;
+  concurrency: number;
+  base_url: string;
+  /** How the SPA should receive live progress: "auto" | "poll" | "sse". */
+  events_transport: string;
+}
+
+/** A batch of events from the polling transport. `gap` means the client's
+ *  cursor fell out of the server's buffer and state must be reloaded. */
+export interface EventPoll {
+  seq: number;
+  events: SseEvent[];
+  gap: boolean;
+}
+
 export interface QueueItem {
   dataset_key: string;
   name: string | null;
