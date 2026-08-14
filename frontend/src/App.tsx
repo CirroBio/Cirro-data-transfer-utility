@@ -102,59 +102,67 @@ export default function App() {
     }
   }, [connected, refreshData, reportError]);
 
-  // Subscribe to the server event stream once.
+  // Subscribe to the server events once.
   useEffect(() => {
-    return subscribeEvents((e) => {
-      if (e.type === "progress") {
-        // Keep the phases separate: each drives its own bar, and download's
-        // `total` is in bytes where the others count files.
-        setProgress((p) => ({
-          ...p,
-          [e.key]: {
-            ...p[e.key],
-            ...(e.phase === "download"
-              ? {
-                  download: {
-                    ...p[e.key]?.download,
-                    file: e.file,
-                    bytes: e.bytes,
-                    totalBytes: e.total,
-                  },
-                }
-              : {
-                  [e.phase]: {
-                    done: e.done,
-                    total: e.total,
-                    file: e.file,
-                    resume: e.resume,
-                  },
-                }),
-          },
-        }));
-      }
-      // A file finished: advance that phase's file count without refetching.
-      if (e.type === "file") {
-        setProgress((p) => ({
-          ...p,
-          [e.key]: {
-            ...p[e.key],
-            [e.phase]: { ...p[e.key]?.[e.phase], done: e.done, total: e.total },
-          },
-        }));
-      }
-      if (e.type === "dataset") {
-        if (e.checksum_method) setChecksumMethod(e.checksum_method);
-        if (["DONE", "FAILED", "PRESENT"].includes(e.status)) {
-          setProgress((p) => {
-            const { [e.key]: _drop, ...rest } = p;
-            return rest;
-          });
+    return subscribeEvents(
+      (e) => {
+        if (e.type === "progress") {
+          // Keep the phases separate: each drives its own bar, and download's
+          // `total` is in bytes where the others count files.
+          setProgress((p) => ({
+            ...p,
+            [e.key]: {
+              ...p[e.key],
+              ...(e.phase === "download"
+                ? {
+                    download: {
+                      ...p[e.key]?.download,
+                      file: e.file,
+                      bytes: e.bytes,
+                      totalBytes: e.total,
+                    },
+                  }
+                : {
+                    [e.phase]: {
+                      done: e.done,
+                      total: e.total,
+                      file: e.file,
+                      resume: e.resume,
+                    },
+                  }),
+            },
+          }));
         }
+        // A file finished: advance that phase's file count without refetching.
+        if (e.type === "file") {
+          setProgress((p) => ({
+            ...p,
+            [e.key]: {
+              ...p[e.key],
+              [e.phase]: { ...p[e.key]?.[e.phase], done: e.done, total: e.total },
+            },
+          }));
+        }
+        if (e.type === "dataset") {
+          if (e.checksum_method) setChecksumMethod(e.checksum_method);
+          if (["DONE", "FAILED", "PRESENT"].includes(e.status)) {
+            setProgress((p) => {
+              const { [e.key]: _drop, ...rest } = p;
+              return rest;
+            });
+          }
+          scheduleRefresh();
+        }
+        if (e.type === "queue") scheduleRefresh();
+        if (e.type === "warning") setError(`${e.name}: ${e.message}`);
+      },
+      // Events were missed: the bars would be stuck mid-transfer, and the
+      // tables are only as fresh as the last event that landed.
+      () => {
+        setProgress({});
         scheduleRefresh();
-      }
-      if (e.type === "queue") scheduleRefresh();
-      if (e.type === "warning") setError(`${e.name}: ${e.message}`);
-    });
+      },
+    );
   }, [scheduleRefresh]);
 
   return (

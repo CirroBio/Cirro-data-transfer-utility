@@ -30,6 +30,10 @@ class Config:
     home: Path = _data_dir()
     # Number of datasets transferred concurrently. Serial (1) by default.
     concurrency: int = int(os.environ.get("CIRRO_TRANSFER_CONCURRENCY", "1"))
+    # How the SPA receives live progress: "auto" tries SSE and falls back to
+    # polling, "poll" skips the attempt (for proxies known to buffer or drop
+    # streaming responses), "sse" disables the fallback.
+    events_transport: str = os.environ.get("CIRRO_TRANSFER_EVENTS_TRANSPORT", "auto")
 
     @property
     def db_path(self) -> Path:

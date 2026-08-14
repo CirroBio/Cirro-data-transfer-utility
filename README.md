@@ -32,8 +32,15 @@ plan CSVs ─▶ csv_loader ─▶ SQLite (datasets/files/excluded/queue/manifes
                           │
                      queue worker ─▶ transfer.py ─▶ sources/* (download→tempdir)
                           │                    └─▶ cirro_gateway (create/upload/verify)
-   FastAPI + SSE ◀────────┘  ◀── live progress ──┘
+   FastAPI events ◀───────┘  ◀── live progress ──┘
 ```
+
+Live progress reaches the SPA over SSE (`/events`) where the network allows it.
+If the opening frame does not arrive within a few seconds — the signature of a
+proxy that buffers or drops streaming responses — the client falls back to
+polling `/events/poll` once a second for the same events, keyed by a sequence
+number so nothing is applied twice. Set `CIRRO_TRANSFER_EVENTS_TRANSPORT=poll`
+in a deployment known to block SSE to skip the attempt.
 
 ## Setup
 
@@ -79,7 +86,9 @@ uvicorn backend.app:app --port 8000 --reload --timeout-graceful-shutdown 1
 
 `--timeout-graceful-shutdown 1` is not optional here: the SPA holds `/events`
 open as an SSE stream, and without a shutdown deadline every reload stalls at
-`Waiting for connections to close` until you close the browser tab.
+`Waiting for connections to close` until you close the browser tab. (It does no
+harm under `CIRRO_TRANSFER_EVENTS_TRANSPORT=poll`, where no stream is held
+open.)
 
 Frontend, in a second shell — Vite serves the SPA with hot module replacement
 and proxies API paths to the backend on :8000. Open the URL it prints (:5173
